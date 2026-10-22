@@ -16,6 +16,10 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Download source code
         uses: actions/checkout@v4
@@ -26,22 +30,55 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Locate Android SDK
+        shell: bash
+        run: |
+          set -e
+          echo "Checking Android SDK..."
+          if [ ! -d "$ANDROID_HOME" ]; then
+            echo "Android SDK directory not found: $ANDROID_HOME"
+            exit 1
+          fi
+
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null | head -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found in $ANDROID_HOME/cmdline-tools"
+            find "$ANDROID_HOME" -type f -name sdkmanager 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Found sdkmanager: $SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
       - name: Install Android SDK components
+        shell: bash
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -e
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Check Java and Gradle
+      - name: Check project files
+        shell: bash
         run: |
+          set -e
           java -version
           gradle --version
+          ls -la
+          test -d app
+          if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
+            echo "Missing settings.gradle or settings.gradle.kts"
+            exit 1
+          fi
 
       - name: Build FLAME CLIENT APK
         run: gradle --no-daemon assembleDebug
