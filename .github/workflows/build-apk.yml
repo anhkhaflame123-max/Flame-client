@@ -60,34 +60,4 @@ jobs:
           set -e
 
           echo "Searching for generated APK..."
-          find . -type f -path '*/build/outputs/apk/*/*.apk' -print
-
-          APK_PATH="$(find . -type f -path '*/build/outputs/apk/debug/*.apk' -size +0c -print -quit)"
-
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH="$(find . -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
-          fi
-
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: No APK was generated."
-            find . -type d -path '*/build/outputs*' -print
-            exit 1
-          fi
-
-          mkdir -p artifact
-          cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
-
-          echo "APK successfully prepared:"
-          ls -lh artifact/FLAME_CLIENT-debug.apk
-          echo "apk_path=artifact/FLAME_CLIENT-debug.apk" >> "$GITHUB_OUTPUT"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: FLAME_CLIENT-debug-apk
-          path: artifact/FLAME_CLIENT-debug.apk
-          if-no-files-found: error
-          retention-days: 7
-```
-
- 
+          
