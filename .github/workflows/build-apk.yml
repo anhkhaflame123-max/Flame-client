@@ -43,52 +43,46 @@ jobs:
           echo "Android SDK directory found."
 
       
+      
       - name: Locate project
         shell: bash
         run: |
           set -eu
 
           ROOT="$GITHUB_WORKSPACE"
-          echo "=== Repository root ==="
+
+          echo "=== Workspace ==="
+          echo "$ROOT"
           ls -la "$ROOT"
 
-          if [ -f "$ROOT/settings.gradle.kts" ] || \
-             [ -f "$ROOT/settings.gradle" ]; then
-            PROJECT_DIR="$ROOT"
-          elif [ -f "$ROOT/app/settings.gradle.kts" ] || \
-               [ -f "$ROOT/app/settings.gradle" ]; then
-            PROJECT_DIR="$ROOT/app"
+          echo "=== All Gradle configuration files ==="
+          find "$ROOT" -type f \
+            \( -name settings.gradle \
+               -o -name settings.gradle.kts \
+               -o -name build.gradle \
+               -o -name build.gradle.kts \) \
+            -not -path '*/.git/*' \
+            -not -path '*/.gradle/*' \
+            -print
+
+          SETTINGS="$(find "$ROOT" -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -not -path '*/.git/*' \
+            -not -path '*/.gradle/*' \
+            -print -quit)"
+
+          if [ -n "$SETTINGS" ]; then
+            PROJECT_DIR="$(dirname "$SETTINGS")"
           elif [ -f "$ROOT/build.gradle.kts" ] || \
                [ -f "$ROOT/build.gradle" ]; then
             PROJECT_DIR="$ROOT"
-          elif [ -f "$ROOT/app/build.gradle.kts" ] || \
-               [ -f "$ROOT/app/build.gradle" ]; then
-            if [ -f "$ROOT/settings.gradle.kts" ] || \
-               [ -f "$ROOT/settings.gradle" ]; then
-              PROJECT_DIR="$ROOT"
-            else
-              echo "::error::Root settings.gradle is missing."
-              exit 1
-            fi
           else
-            echo "::error::Gradle build files not found in root or app."
-            find "$ROOT" -maxdepth 4 -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \
-                 -o -name build.gradle -o -name build.gradle.kts \) \
-              -print
-            exit 1
-          fi
-
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "::error::The selected project has no app module."
+            echo "::error::Gradle root not identified. Check the file list above."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Selected project: $PROJECT_DIR"
-          echo "=== App module files ==="
-          ls -la "$PROJECT_DIR/app"
-
+          echo "Selected root: $PROJECT_DIR"
       - name: Build debug APK
         shell: bash
         run: |
