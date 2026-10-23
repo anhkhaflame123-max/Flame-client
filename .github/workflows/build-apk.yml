@@ -3,112 +3,70 @@ name: Build FLAME CLIENT APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Show project structure
-        shell: bash
-        run: |
-          echo "=== Repository files ==="
-          ls -la
-          echo "=== Gradle files ==="
-          find . -maxdepth 8 -type f \
-            \( -name "gradlew" \
-            -o -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \
-            -o -name "build.gradle" \
-            -o -name "build.gradle.kts" \
-            -o -name "gradle-wrapper.properties" \) \
-            -print
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle # 빌드 속도 향상을 위해 캐시 추가
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
         with:
-          cmdline-tools-version: 12266719
+          gradle-version: '8.9'
 
-      # [추가됨] 안드로이드 빌드에 필수적인 SDK 플랫폼 및 빌드 툴 자동 설치
-      - name: Install Android SDK components
+      - name: Check project and JVM targets
         run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "platforms;android-35" \
-            "build-tools;34.0.0" \
-            "build-tools;35.0.0"
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
+          grep -n "VERSION_17\|jvmTarget\|jvmToolchain" app/build.gradle.kts
+          java -version
+          gradle --version
 
-      - name: Locate Gradle wrapper
+      - name: Build debug APK
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Prepare APK for upload
         shell: bash
         run: |
-          WRAPPER="$(find . -maxdepth 8 -type f \
-            -name gradlew -print -quit)"
-
-          if [ -z "$WRAPPER" ]; then
-            echo "::error::Cannot find gradlew. Check the project structure above."
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$WRAPPER")"
-          PROJECT_DIR="$(realpath "$PROJECT_DIR")"
-
-          if [ ! -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "::error::Gradle wrapper properties are missing."
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found Gradle wrapper: $WRAPPER"
-
-          # Gradle이 SDK 경로를 확실히 찾을 수 있도록 local.properties 자동 생성
-          if [ -n "$ANDROID_HOME" ]; then
-            echo "sdk.dir=$ANDROID_HOME" > "$PROJECT_DIR/local.properties"
-            echo "Created local.properties with sdk.dir=$ANDROID_HOME"
-          fi
-
-      - name: Build APK
-        shell: bash
-        run: |
-          chmod +x "$PROJECT_DIR/gradlew"
-          cd "$PROJECT_DIR"
-          ./gradlew --no-daemon --stacktrace assembleDebug
-
-      - name: Locate APK
-        shell: bash
-        run: |
-          mkdir -p artifact
-
-          # 저장소 전체에서 APK 검색 (못 찾는 경우 방지)
-          APK_PATH="$(find . -type f \
-            -path "*/build/outputs/apk/*/*.apk" \
-            ! -name "*androidTest*" -print -quit)"
-
+          set -euo pipefail
+          echo "Searching for generated APK files..."
+          find . -type f -name '*.apk' -size +0c -print
+          APK_PATH="$(find . -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
           if [ -z "$APK_PATH" ]; then
-            echo "::error::No APK was found after the build."
+            APK_PATH="$(find . -type f -name '*.apk' -size +0c -print -quit)"
+          fi
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: No non-empty APK file was found to upload."
+            find . -type d -path '*/build/outputs*' -print || true
             exit 1
           fi
-
+          mkdir -p artifact
           cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
-          ls -lh artifact/FLAME_CLIENT-debug.apk
+          test -s artifact/FLAME_CLIENT-debug.apk
+          echo "Prepared artifact/FLAME_CLIENT-debug.apk from: $APK_PATH"
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-apk
