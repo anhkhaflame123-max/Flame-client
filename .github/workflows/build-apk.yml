@@ -19,71 +19,77 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Show project structure
+        shell: bash
+        run: |
+          echo "=== Repository files ==="
+          ls -la
+          echo "=== Gradle files ==="
+          find . -maxdepth 8 -type f \
+            \( -name "gradlew" \
+            -o -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+            -o -name "build.gradle" \
+            -o -name "build.gradle.kts" \
+            -o -name "gradle-wrapper.properties" \) \
+            -print
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK
-        run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Locate Android project
+      - name: Locate Gradle wrapper
         shell: bash
         run: |
-          echo "Checking project files..."
-          find . -maxdepth 4 \
-            \( -name gradlew -o -name settings.gradle \
-            -o -name settings.gradle.kts \) -print
+          WRAPPER="$(find . -maxdepth 8 -type f \
+            -name gradlew -print -quit)"
 
-          if [ -f "./gradlew" ]; then
-            PROJECT_DIR="."
-          elif [ -f "./app/gradlew" ]; then
-            PROJECT_DIR="./app"
-          else
-            echo "::error::Cannot find Gradle wrapper. Check that Android source files are uploaded."
+          if [ -z "$WRAPPER" ]; then
+            echo "::error::Cannot find gradlew. Check the project structure above."
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$WRAPPER")"
+          PROJECT_DIR="$(realpath "$PROJECT_DIR")"
+
+          if [ ! -f "$PROJECT_DIR/gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "::error::Gradle wrapper properties are missing."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found Gradle wrapper: $WRAPPER"
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x "$PROJECT_DIR/gradlew"
-
-      - name: Build debug APK
+      - name: Build APK
         shell: bash
         run: |
+          chmod +x "$PROJECT_DIR/gradlew"
           cd "$PROJECT_DIR"
           ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Find and prepare APK
+      - name: Locate APK
         shell: bash
         run: |
           mkdir -p artifact
 
-          APK_PATH="$(find "$PROJECT_DIR" \
-            -type f \
+          APK_PATH="$(find "$PROJECT_DIR" -type f \
             -path "*/build/outputs/apk/*/*.apk" \
-            ! -name "*androidTest*" \
-            | head -n 1)"
+            ! -name "*androidTest*" -print -quit)"
 
           if [ -z "$APK_PATH" ]; then
-            echo "::error::Build finished but no APK was found."
+            echo "::error::No APK was found after the build."
             exit 1
           fi
 
           cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
           ls -lh artifact/FLAME_CLIENT-debug.apk
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-apk
