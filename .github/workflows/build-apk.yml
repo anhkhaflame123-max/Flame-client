@@ -1,4 +1,47 @@
 
+name: Build FLAME CLIENT APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Check Android SDK
+        shell: bash
+        run: |
+          set -e
+          echo "Checking Android SDK..."
+          test -d "$ANDROID_HOME"
+          ls "$ANDROID_HOME"
+          echo "Android SDK directory found."
+
       - name: Locate project
         id: locate
         shell: bash
@@ -43,3 +86,18 @@
           echo "=== Selected project directory ==="
           echo "$PROJECT_DIR"
           ls -la "$PROJECT_DIR"
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLAME-CLIENT-debug
+          path: '**/build/outputs/apk/debug/*.apk'
+          if-no-files-found: error
+          retention-days: 7
