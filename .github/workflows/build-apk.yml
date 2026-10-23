@@ -24,55 +24,66 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Install Android SDK
         run: |
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Find Android project
+      - name: Locate Android project
         shell: bash
         run: |
+          echo "Checking project files..."
+          find . -maxdepth 4 \
+            \( -name gradlew -o -name settings.gradle \
+            -o -name settings.gradle.kts \) -print
+
           if [ -f "./gradlew" ]; then
-            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+            PROJECT_DIR="."
           elif [ -f "./app/gradlew" ]; then
-            echo "PROJECT_DIR=app" >> "$GITHUB_ENV"
+            PROJECT_DIR="./app"
           else
-            echo "ERROR: Cannot find gradlew."
-            echo "Upload the Android project source, including gradlew."
+            echo "::error::Cannot find Gradle wrapper. Check that Android source files are uploaded."
             exit 1
           fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Make Gradle wrapper executable
         run: chmod +x "$PROJECT_DIR/gradlew"
 
-      - name: Build FLAME CLIENT APK
+      - name: Build debug APK
+        shell: bash
         run: |
           cd "$PROJECT_DIR"
-          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+          ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Prepare APK
+      - name: Find and prepare APK
         shell: bash
         run: |
           mkdir -p artifact
-          APK_PATH="$(find "$PROJECT_DIR" -type f \
+
+          APK_PATH="$(find "$PROJECT_DIR" \
+            -type f \
             -path "*/build/outputs/apk/*/*.apk" \
+            ! -name "*androidTest*" \
             | head -n 1)"
 
           if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK was not generated."
+            echo "::error::Build finished but no APK was found."
             exit 1
           fi
 
           cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
-          ls -lh artifact/
+          ls -lh artifact/FLAME_CLIENT-debug.apk
 
-      - name: Upload FLAME CLIENT APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-apk
