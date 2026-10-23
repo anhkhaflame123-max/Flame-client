@@ -1,4 +1,3 @@
-
 name: Build FLAME CLIENT APK
 
 on:
@@ -6,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - master
 
 permissions:
   contents: read
@@ -19,68 +17,54 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Extract project ZIP
-        shell: bash
-        run: |
-          set -e
-          mkdir -p extracted
-
-          ZIP="$(find . -maxdepth 3 -type f -iname '*.zip' -print -quit)"
-
-          if [ -z "$ZIP" ]; then
-            echo "::error::Không tìm thấy file ZIP trong repository."
-            exit 1
-          fi
-
-          echo "Found ZIP: $ZIP"
-          unzip -o "$ZIP" -d extracted
-
-          echo "===== EXTRACTED FILES ====="
-          find extracted -maxdepth 5 -type f | head -200
-
-      - name: Find Gradle project
-        id: project
-        shell: bash
-        run: |
-          WRAPPER="$(find extracted -type f -name gradlew -print -quit)"
-
-          if [ -z "$WRAPPER" ]; then
-            echo "::error::ZIP không có gradlew. Cần kiểm tra và bổ sung Gradle Wrapper."
-            exit 1
-          fi
-
-          DIR="$(dirname "$WRAPPER")"
-          DIR="$(realpath "$DIR")"
-
-          if [ ! -f "$DIR/gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "::error::Thiếu gradle-wrapper.properties."
-            exit 1
-          fi
-
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build APK
+      - name: Extract project ZIP if needed
         shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
         run: |
+          set -e
+          if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
+            ZIP="$(find . -maxdepth 3 -type f -iname '*.zip' -print -quit)"
+            if [ -z "$ZIP" ]; then
+              echo "::error::Không tìm thấy settings.gradle.kts hoặc ZIP dự án."
+              exit 1
+            fi
+            mkdir -p extracted
+            unzip -o "$ZIP" -d extracted
+            ROOT="$(find extracted -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)"
+            if [ -z "$ROOT" ]; then
+              echo "::error::ZIP không chứa dự án Gradle hợp lệ."
+              exit 1
+            fi
+            echo "PROJECT_DIR=$(dirname "$ROOT")" >> "$GITHUB_ENV"
+          else
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          fi
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -e
           cd "$PROJECT_DIR"
-          chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug
+          gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_CLIENT-debug-apk
-          path: extracted/**/build/outputs/apk/**/*.apk
+          name: FLAME-CLIENT-debug
+          path: |
+            **/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
