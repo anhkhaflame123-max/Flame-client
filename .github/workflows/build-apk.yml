@@ -45,13 +45,36 @@ jobs:
       - name: Locate project
         shell: bash
         run: |
-          set -e
-          ROOT="$(find . -maxdepth 5 -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path './.git/*' -print -quit)"
-          if [ -z "$ROOT" ]; then
+          set -eu
+
+          echo "=== Searching for Android project ==="
+          echo "Current directory: $GITHUB_WORKSPACE"
+
+          find "$GITHUB_WORKSPACE" -maxdepth 6 \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/.git/*" \
+            -print
+
+          PROJECT_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 6 \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/.git/*" \
+            -print -quit)"
+
+          if [ -z "$PROJECT_FILE" ]; then
             echo "::error::Cannot find settings.gradle or settings.gradle.kts"
+            echo "=== Files at repository root ==="
+            ls -la "$GITHUB_WORKSPACE"
             exit 1
           fi
-          echo "PROJECT_DIR=$(dirname "$ROOT")" >> "$GITHUB_ENV"
+
+          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "=== Project found ==="
+          echo "$PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
       - name: Build debug APK
         shell: bash
