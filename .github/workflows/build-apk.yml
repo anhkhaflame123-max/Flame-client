@@ -42,50 +42,48 @@ jobs:
           ls "$ANDROID_HOME"
           echo "Android SDK directory found."
 
-        - name: Locate project
-        id: locate
+      - name: Locate project
         shell: bash
         run: |
           set -eu
 
-          echo "=== Repository root ==="
-          pwd
-          ls -la "$GITHUB_WORKSPACE"
+          ROOT="$GITHUB_WORKSPACE"
+          echo "=== Repository files ==="
+          ls -la "$ROOT"
 
-          echo "=== Searching Gradle project files ==="
-          find "$GITHUB_WORKSPACE" \
+          SETTINGS="$(find "$ROOT" \
             -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
-            -type f \( \
-              -name settings.gradle \
-              -o -name settings.gradle.kts \
-            \) -print
+            -type f \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)"
 
-          PROJECT_FILE="$(find "$GITHUB_WORKSPACE" \
-            -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
-            -type f \( \
-              -name settings.gradle \
-              -o -name settings.gradle.kts \
-            \) -print -quit)"
-
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "::error::No settings.gradle or settings.gradle.kts found."
-            echo "=== Build files found ==="
-            find "$GITHUB_WORKSPACE" \
+          if [ -n "$SETTINGS" ]; then
+            PROJECT_DIR="$(dirname "$SETTINGS")"
+          elif [ -f "$ROOT/build.gradle" ] || [ -f "$ROOT/build.gradle.kts" ]; then
+            PROJECT_DIR="$ROOT"
+          else
+            echo "::error::Cannot find Gradle project root."
+            echo "=== Gradle files found ==="
+            find "$ROOT" \
               -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
               -type f \( \
-                -name build.gradle \
+                -name settings.gradle \
+                -o -name settings.gradle.kts \
+                -o -name build.gradle \
                 -o -name build.gradle.kts \
-                -o -name gradlew \
               \) -print
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$PROJECT_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "=== Selected project directory ==="
-          echo "$PROJECT_DIR"
+          echo "Project directory: $PROJECT_DIR"
           ls -la "$PROJECT_DIR"
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+          gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
