@@ -42,141 +42,26 @@ jobs:
           gradle-version: '8.9'
 
       - name: Check project files
+        shell: bash
         run: |
-          echo "Checking Android project..."
+          echo "Checking project structure..."
+          pwd
+          ls -la
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
-          echo "Project files found."
+          echo "Project files OK"
           java -version
           gradle --version
 
       - name: Build debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Locate and prepare APK
+      - name: Find and prepare APK
         id: apk
         shell: bash
         run: |
           set -e
 
-          echo "Searching for generated APK..."
-          find . -type f -path '*/build/outputs/apk/*/*.apk' -print
-
-          APK_PATH="$(find . -type f -path '*/build/outputs/apk/debug/*.apk' -size +0c -print -quit)"
-
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH="$(find . -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
-          fi
-
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: No APK was generated."
-            find . -type d -path '*/build/outputs*' -print
-            exit 1
-          fi
-
-          mkdir -p artifact
-          cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
-
-          echo "APK successfully prepared:"
-          ls -lh artifact/FLAME_CLIENT-debug.apk
-          echo "apk_path=artifact/FLAME_CLIENT-debug.apk" >> "$GITHUB_OUTPUT"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: FLAME_CLIENT-debug-apk
-          path: artifact/FLAME_CLIENT-debug.apk
-          if-no-files-found: error
-          retention-days: 7
-```
-```yaml
-name: Build FLAME CLIENT APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    name: Build Android APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Install Android SDK packages
-        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Check project files
-        run: |
-          echo "Checking Android project..."
-          test -f settings.gradle.kts
-          test -f app/build.gradle.kts
-          echo "Project files found."
-          java -version
-          gradle --version
-
-      - name: Build debug APK
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Locate and prepare APK
-        id: apk
-        shell: bash
-        run: |
-          set -e
-
-          echo "Searching for generated APK..."
-          find . -type f -path '*/build/outputs/apk/*/*.apk' -print
-
-          APK_PATH="$(find . -type f -path '*/build/outputs/apk/debug/*.apk' -size +0c -print -quit)"
-
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH="$(find . -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
-          fi
-
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: No APK was generated."
-            find . -type d -path '*/build/outputs*' -print
-            exit 1
-          fi
-
-          mkdir -p artifact
-          cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
-
-          echo "APK successfully prepared:"
-          ls -lh artifact/FLAME_CLIENT-debug.apk
-          echo "apk_path=artifact/FLAME_CLIENT-debug.apk" >> "$GITHUB_OUTPUT"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: FLAME_CLIENT-debug-apk
-          path: artifact/FLAME_CLIENT-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+          echo "Searching for APK..."
+       
 ```
