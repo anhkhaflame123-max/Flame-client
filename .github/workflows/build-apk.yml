@@ -1,0 +1,104 @@
+name: Build FLAME CLIENT APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract FLAME CLIENT source ZIP if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "settings.gradle.kts" ] && [ -d app ]; then
+            echo "Project source is already at repository root."
+            exit 0
+          fi
+
+          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' -print -quit)"
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No project files and no ZIP file found in repository."
+            echo "Repository files:"
+            find . -maxdepth 3 -type f | head -100
+            exit 1
+          fi
+
+          echo "Extracting: $ZIP_FILE"
+          mkdir -p _flame_source
+          unzip -oq "$ZIP_FILE" -d _flame_source
+
+          PROJECT_DIR="$(find _flame_source -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "ERROR: ZIP extracted, but settings.gradle.kts and app/build.gradle.kts were not found together."
+            find _flame_source -maxdepth 5 -type f | head -100
+            exit 1
+          fi
+
+          echo "FLAME_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project at: $PROJECT_DIR"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${FLAME_PROJECT_DIR:-}" ]; then
+            FLAME_PROJECT_DIR="."
+          fi
+          cd "$FLAME_PROJECT_DIR"
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
+          java -version
+          gradle --version
+          gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Find generated APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT_DIR="${FLAME_PROJECT_DIR:-.}"
+          APK_PATH="$(find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: Build finished but no APK was found. Output directories:"
+            find "$PROJECT_DIR" -type d -path '*/build/outputs*' -print || true
+            exit 1
+          fi
+          echo "Found APK: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLAME_CLIENT-debug-apk
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 7
