@@ -16,35 +16,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download source code
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Inspect project
+      - name: Extract project ZIP
         shell: bash
         run: |
-          echo "===== ROOT DIRECTORY ====="
-          pwd
-          ls -la
+          set -e
+          mkdir -p extracted
 
-          echo "===== GRADLE FILES ====="
-          find . -maxdepth 8 -type f \( \
-            -name gradlew -o \
-            -name gradle-wrapper.properties -o \
-            -name settings.gradle -o \
-            -name settings.gradle.kts -o \
-            -name build.gradle -o \
-            -name build.gradle.kts \
-          \) -print
+          ZIP="$(find . -maxdepth 3 -type f -iname '*.zip' -print -quit)"
+
+          if [ -z "$ZIP" ]; then
+            echo "::error::Không tìm thấy file ZIP trong repository."
+            exit 1
+          fi
+
+          echo "Found ZIP: $ZIP"
+          unzip -o "$ZIP" -d extracted
+
+          echo "===== EXTRACTED FILES ====="
+          find extracted -maxdepth 5 -type f | head -200
 
       - name: Find Gradle project
         id: project
         shell: bash
         run: |
-          WRAPPER="$(find . -maxdepth 8 -type f \
-            -name gradlew -print -quit)"
+          WRAPPER="$(find extracted -type f -name gradlew -print -quit)"
 
           if [ -z "$WRAPPER" ]; then
-            echo "::error::Không tìm thấy gradlew. Source project có thể thiếu hoặc nằm sai thư mục."
+            echo "::error::ZIP không có gradlew. Cần kiểm tra và bổ sung Gradle Wrapper."
             exit 1
           fi
 
@@ -52,13 +53,11 @@ jobs:
           DIR="$(realpath "$DIR")"
 
           if [ ! -f "$DIR/gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "::error::Thiếu gradle/wrapper/gradle-wrapper.properties."
+            echo "::error::Thiếu gradle-wrapper.properties."
             exit 1
           fi
 
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Project directory: $DIR"
-          cat "$DIR/gradle/wrapper/gradle-wrapper.properties"
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -69,42 +68,19 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build debug APK
+      - name: Build APK
         shell: bash
         env:
           PROJECT_DIR: ${{ steps.project.outputs.dir }}
         run: |
           cd "$PROJECT_DIR"
           chmod +x ./gradlew
-          java -version
-          ./gradlew --version
           ./gradlew --no-daemon --stacktrace assembleDebug
-
-      - name: Find and prepare APK
-        shell: bash
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.dir }}
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/artifact"
-
-          APK="$(find "$PROJECT_DIR" -type f \
-            -path '*/build/outputs/apk/*/*.apk' \
-            ! -path '*/androidTest/*' \
-            -print -quit)"
-
-          if [ -z "$APK" ]; then
-            echo "::error::Build kết thúc nhưng không tìm thấy file APK."
-            find "$PROJECT_DIR" -type f -name '*.apk' -print
-            exit 1
-          fi
-
-          cp "$APK" "$GITHUB_WORKSPACE/artifact/FLAME_CLIENT-debug.apk"
-          ls -lh "$GITHUB_WORKSPACE/artifact/FLAME_CLIENT-debug.apk"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-apk
-          path: artifact/FLAME_CLIENT-debug.apk
+          path: extracted/**/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 7
