@@ -48,8 +48,17 @@ jobs:
           set -eu
 
           ROOT="$GITHUB_WORKSPACE"
-          echo "=== Repository files ==="
+
+          echo "=== Repository root ==="
           ls -la "$ROOT"
+
+          echo "=== Project files ==="
+          find "$ROOT" -maxdepth 7 -type f \
+            -not -path '*/.git/*' \
+            -not -path '*/.gradle/*' \
+            | sort | head -200
+
+          PROJECT_DIR=""
 
           SETTINGS="$(find "$ROOT" \
             -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
@@ -58,24 +67,19 @@ jobs:
 
           if [ -n "$SETTINGS" ]; then
             PROJECT_DIR="$(dirname "$SETTINGS")"
-          elif [ -f "$ROOT/build.gradle" ] || [ -f "$ROOT/build.gradle.kts" ]; then
+          elif [ -f "$ROOT/build.gradle" ] || \
+               [ -f "$ROOT/build.gradle.kts" ]; then
+            PROJECT_DIR="$ROOT"
+          elif [ -f "$ROOT/app/build.gradle" ] || \
+               [ -f "$ROOT/app/build.gradle.kts" ]; then
             PROJECT_DIR="$ROOT"
           else
-            echo "::error::Cannot find Gradle project root."
-            echo "=== Gradle files found ==="
-            find "$ROOT" \
-              -type d \( -name .git -o -name .gradle -o -name build \) -prune -o \
-              -type f \( \
-                -name settings.gradle \
-                -o -name settings.gradle.kts \
-                -o -name build.gradle \
-                -o -name build.gradle.kts \
-              \) -print
+            echo "::error::Cannot find Gradle project configuration."
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Selected project: $PROJECT_DIR"
           ls -la "$PROJECT_DIR"
 
       - name: Build debug APK
