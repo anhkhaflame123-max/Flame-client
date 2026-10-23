@@ -42,7 +42,7 @@ jobs:
           ls "$ANDROID_HOME"
           echo "Android SDK directory found."
 
-      - name: Locate project
+        - name: Locate project
         id: locate
         shell: bash
         run: |
@@ -86,13 +86,6 @@ jobs:
           echo "=== Selected project directory ==="
           echo "$PROJECT_DIR"
           ls -la "$PROJECT_DIR"
-
-      - name: Build debug APK
-        shell: bash
-        run: |
-          set -e
-          cd "$PROJECT_DIR"
-          gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
