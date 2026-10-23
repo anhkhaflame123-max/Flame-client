@@ -18,36 +18,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Find and extract FLAME CLIENT source ZIP if needed
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f settings.gradle.kts ] && [ -f app/build.gradle.kts ]; then
-            echo "Project source is already at repository root."
-            exit 0
-          fi
-
-          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' -print -quit)"
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No project source found at root and no ZIP file was found."
-            find . -maxdepth 3 -type f | head -100
-            exit 1
-          fi
-
-          echo "Extracting $ZIP_FILE"
-          mkdir -p _flame_source
-          unzip -oq "$ZIP_FILE" -d _flame_source
-
-          PROJECT_DIR="$(find _flame_source -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
-          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: Could not find settings.gradle.kts and app/build.gradle.kts in the ZIP."
-            find _flame_source -maxdepth 5 -type f | head -100
-            exit 1
-          fi
-
-          echo "FLAME_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project at: $PROJECT_DIR"
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -66,42 +36,35 @@ jobs:
           gradle-version: '8.9'
 
       - name: Check project and JVM targets
-        shell: bash
         run: |
-          set -euo pipefail
-          PROJECT_DIR="${FLAME_PROJECT_DIR:-.}"
-          cd "$PROJECT_DIR"
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
-          grep -n "VERSION_17\|jvmTarget\|jvmToolchain" app/build.gradle.kts || true
+          grep -n "VERSION_17\|jvmTarget\|jvmToolchain" app/build.gradle.kts
           java -version
           gradle --version
 
       - name: Build debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROJECT_DIR="${FLAME_PROJECT_DIR:-.}"
-          cd "$PROJECT_DIR"
-          gradle --no-daemon --stacktrace :app:assembleDebug
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Collect APK for upload
+      - name: Prepare APK for upload
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT_DIR="${FLAME_PROJECT_DIR:-.}"
-          echo "Searching for APK files under: $PROJECT_DIR"
-          find "$PROJECT_DIR" -type f -name '*.apk' -print
-          APK_PATH="$(find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
+          echo "Searching for generated APK files..."
+          find . -type f -name '*.apk' -size +0c -print
+          APK_PATH="$(find . -type f -path '*/build/outputs/apk/*/*.apk' -size +0c -print -quit)"
           if [ -z "$APK_PATH" ]; then
-            echo "ERROR: No non-empty APK file was found. This is a build output issue, not an upload path issue."
-            find "$PROJECT_DIR" -type d -path '*/build/outputs*' -print || true
+            APK_PATH="$(find . -type f -name '*.apk' -size +0c -print -quit)"
+          fi
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: No non-empty APK file was found to upload."
+            find . -type d -path '*/build/outputs*' -print || true
             exit 1
           fi
           mkdir -p artifact
           cp "$APK_PATH" artifact/FLAME_CLIENT-debug.apk
           test -s artifact/FLAME_CLIENT-debug.apk
-          echo "Prepared artifact/FLAME_CLIENT-debug.apk"
+          echo "Prepared artifact/FLAME_CLIENT-debug.apk from: $APK_PATH"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -109,4 +72,4 @@ jobs:
           name: FLAME_CLIENT-debug-apk
           path: artifact/FLAME_CLIENT-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 7 
