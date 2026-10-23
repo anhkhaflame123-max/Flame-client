@@ -21,14 +21,16 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Set up Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
@@ -36,50 +38,78 @@ jobs:
       - name: Check Android SDK
         shell: bash
         run: |
-          set -e
-          echo "Checking Android SDK..."
-          test -d "$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          if [ ! -d "$ANDROID_HOME" ]; then
+            echo "::error::Android SDK directory not found."
+            exit 1
+          fi
           ls "$ANDROID_HOME"
-          echo "Android SDK directory found."
 
       - name: Locate project
         shell: bash
         run: |
           set -eu
-
           ROOT="$GITHUB_WORKSPACE"
-          echo "Workspace: $ROOT"
 
-          if [ -f "$ROOT/settings.gradle.kts" ]; then
-            PROJECT_DIR="$ROOT"
-          elif [ -f "$ROOT/settings.gradle" ]; then
-            PROJECT_DIR="$ROOT"
-          elif [ -f "$ROOT/app/build.gradle.kts" ] || \
-               [ -f "$ROOT/app/build.gradle" ]; then
-            PROJECT_DIR="$ROOT"
+          echo "=== Workspace directories ==="
+          find "$ROOT" -maxdepth 5 -type d \
+            -not -path '*/.git*' \
+            -not -path '*/.gradle*' -print
+
+          echo "=== Gradle build files ==="
+          find "$ROOT" -type f \
+            \( -name settings.gradle \
+            -o -name settings.gradle.kts \
+            -o -name build.gradle \
+            -o -name build.gradle.kts \) \
+            -not -path '*/.git/*' \
+            -not -path '*/.gradle/*' -print
+
+          SETTINGS="$(find "$ROOT" -type f \
+            \( -name settings.gradle \
+            -o -name settings.gradle.kts \) \
+            -not -path '*/.git/*' \
+            -not -path '*/.gradle/*' \
+            -print -quit)"
+
+          if [ -n "$SETTINGS" ]; then
+            PROJECT_DIR="$(dirname "$SETTINGS")"
           else
-            echo "Root files:"
-            ls -la "$ROOT"
-            echo "App files:"
-            ls -la "$ROOT/app" || true
-            echo "::error::Project location not identified."
-            exit 1
+            BUILD_FILE="$(find "$ROOT" -type f \
+              \( -name build.gradle \
+              -o -name build.gradle.kts \) \
+              -not -path '*/.git/*' \
+              -not -path '*/.gradle/*' \
+              -print -quit)"
+
+            if [ -z "$BUILD_FILE" ]; then
+              echo "::error::No Gradle build files found."
+              exit 1
+            fi
+
+            PROJECT_DIR="$(dirname "$BUILD_FILE")"
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Selected project: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
       - name: Build debug APK
         shell: bash
         run: |
-          set -e
           cd "$PROJECT_DIR"
           gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Find APK
+        shell: bash
+        run: |
+          find "$PROJECT_DIR" -type f -name '*.apk' -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME-CLIENT-debug
-          path: '**/build/outputs/apk/debug/*.apk'
+          name: FLAME-CLIENT-APK
+          path: |
+            **/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
