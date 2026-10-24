@@ -6,16 +6,13 @@ on:
   push:
     branches:
       - main
-      - master
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build FLAME CLIENT
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -28,92 +25,138 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ''
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        shell: bash
         run: |
-          set -euo pipefail
+          set -e
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Find project and build APK
+      - name: Find project and extract ZIP files
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== Repository files ==="
-          ls -la
+          WORK="$GITHUB_WORKSPACE"
+          EXTRACT="$RUNNER_TEMP/flame_extract"
+          mkdir -p "$EXTRACT"
 
-          SETTINGS=""
+          echo "Repository contents:"
+          find "$WORK" -maxdepth 3 -type f | head -200
 
-          if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
-            SETTINGS="./settings.gradle"
-            [ -f settings.gradle ] || SETTINGS="./settings.gradle.kts"
-          else
-            SETTINGS="$(find . \
-              -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -not -path './.git/*' \
-              -not -path './.github/*' \
-              -not -path '*/build/*' \
-              -print -quit)"
+          # Extract project and pack ZIP files without modifying originals.
+          while IFS= read -r -d '' archive; do
+            echo "Extracting: $archive"
+            target="$EXTRACT/$(basename "$archive" .zip)"
+            mkdir -p "$target"
+            unzip -oq "$archive" -d "$target"
+          done < <(
+            find "$WORK" -type f -iname '*.zip' \
+              -not -path '*/.git/*' -print0
+          )
+
+          # Search extracted ZIPs first, then the repository.
+          PROJECT_ROOT=""
+
+          for base in "$EXTRACT" "$WORK"; do
+            while IFS= read -r -d '' settings; do
+              candidate="$(dirname "$settings")"
+
+              if [ -d "$candidate/app" ] &&
+                 { [ -f "$candidate/app/build.gradle" ] ||
+                   [ -f "$candidate/app/build.gradle.kts" ]; }; then
+                PROJECT_ROOT="$candidate"
+                break 2
+              fi
+            done < <(
+              find "$base" \
+                \( -path '*/.git' -o -path '*/.github' -o \
+                   -path '*/build' -o -path '*/.gradle' \) -prune -o \
+                \( -name settings.gradle -o \
+                   -name settings.gradle.kts \) \
+                -type f -print0 2>/dev/null
+            )
+          done
+
+          # Fallback: find a root-level Android app build file.
+          if [ -z "$PROJECT_ROOT" ]; then
+            for base in "$EXTRACT" "$WORK"; do
+              app_build="$(
+                find "$base" \
+                  \( -path '*/.git' -o -path '*/.github' -o \
+                     -path '*/build' -o -path '*/.gradle' \) -prune -o \
+                  \( -path '*/app/build.gradle' -o \
+                     -path '*/app/build.gradle.kts' \) \
+                  -type f -print -quit 2>/dev/null || true
+              )"
+
+              if [ -n "$app_build" ]; then
+                PROJECT_ROOT="$(dirname "$(dirname "$app_build")")"
+                break
+              fi
+            done
           fi
 
-          if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Không tìm thấy settings.gradle(.kts)."
-            echo "Repo có thể chưa chứa source project Android."
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "::error::Cannot find Android Gradle project."
+            echo "Expected settings.gradle(.kts) and app/build.gradle(.kts)."
+            echo "Check whether the ZIP files contain the actual project."
             exit 1
           fi
 
-          ROOT="$(dirname "$SETTINGS")"
-          echo "Gradle root: $ROOT"
+          echo "Project root found: $PROJECT_ROOT"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-          if [ ! -d "$ROOT/app" ]; then
-            echo "ERROR: Không có thư mục app/ tại $ROOT"
-            ls -la "$ROOT"
-            exit 1
-          fi
+          echo "Project root files:"
+          ls -la "$PROJECT_ROOT"
 
-          if [ ! -f "$ROOT/app/build.gradle" ] && \
-             [ ! -f "$ROOT/app/build.gradle.kts" ]; then
-            echo "ERROR: Thiếu file build Gradle của app."
-            exit 1
-          fi
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
 
-          cd "$ROOT"
+          echo "Building from: $(pwd)"
 
-          if [ -f gradlew ]; then
+          if [ -f "gradlew" ]; then
             chmod +x gradlew
-            ./gradlew --no-daemon --stacktrace assembleDebug
+            ./gradlew --no-daemon assembleDebug
           else
-            gradle --no-daemon --stacktrace assembleDebug
+            gradle --no-daemon assembleDebug
           fi
 
-          APK="$(find app/build/outputs/apk/debug \
-            -type f -name '*.apk' -print -quit)"
+      - name: Locate APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Searching for APK..."
+          find "$PROJECT_ROOT" -type f -name '*.apk' -print
+
+          APK="$(find "$PROJECT_ROOT" \
+            -type f -path '*/build/outputs/apk/debug/*.apk' \
+            -print -quit)"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Build không tạo ra APK."
+            echo "::error::Build completed but no debug APK was found."
             exit 1
           fi
 
-          echo "APK_PATH=$ROOT/$APK" >> "$GITHUB_ENV"
-          echo "Build APK thành công: $APK"
+          echo "APK found: $APK"
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_CLIENT-debug-APK
+          name: FLAME-CLIENT-APK
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 7
