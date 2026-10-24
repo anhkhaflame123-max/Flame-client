@@ -4,19 +4,21 @@ name: Build FLAME CLIENT APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build FLAME CLIENT
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Set up Java 17
@@ -29,55 +31,75 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Locate and prepare FLAME v2.2
+      - name: Locate FLAME project
         shell: bash
         run: |
           set -euo pipefail
-          ZIP=""
-          for f in FLAME_CLIENT_v2.2_FLARIAL_INSPIRED_FIXED_BUILD.zip FLAME_CLIENT_v2.2_FLARIAL_INSPIRED.zip; do
-            if [ -f "$f" ]; then ZIP="$f"; break; fi
-          done
 
-          if [ -n "$ZIP" ]; then
-            mkdir -p _flame_extract
-            unzip -oq "$ZIP" -d _flame_extract
-            SETTINGS="$(find _flame_extract -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
-            if [ -z "$SETTINGS" ]; then
-              echo "ERROR: ZIP không có settings.gradle(.kts)"
+          if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
+            echo "Found Gradle project at repository root."
+          else
+            ZIP=""
+            for f in \
+              FLAME_CLIENT_v2.2_FLARIAL_INSPIRED_FIXED_BUILD.zip \
+              FLAME_CLIENT_v2.2_FLARIAL_INSPIRED.zip; do
+              if [ -f "$f" ]; then
+                ZIP="$f"
+                break
+              fi
+            done
+
+            if [ -z "$ZIP" ]; then
+              echo "ERROR: Không tìm thấy Gradle project hoặc ZIP v2.2."
+              ls -la
               exit 1
             fi
+
+            mkdir -p _flame_extract
+            unzip -oq "$ZIP" -d _flame_extract
+
+            SETTINGS="$(find _flame_extract -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -print -quit)"
+
+            if [ -z "$SETTINGS" ]; then
+              echo "ERROR: ZIP không có settings.gradle(.kts)."
+              exit 1
+            fi
+
             ROOT="$(dirname "$SETTINGS")"
             cp -a "$ROOT"/. .
           fi
 
-          if [ ! -f app/build.gradle.kts ] || [ ! -f app/src/main/java/com/flameclient/android/MainActivity.kt ]; then
-            echo "ERROR: Không tìm thấy source Android FLAME CLIENT v2.2."
-            echo "Hãy kiểm tra ZIP đã được tải lên thư mục gốc repository."
+          if [ ! -d app ]; then
+            echo "ERROR: Không tìm thấy thư mục app/."
             ls -la
             exit 1
           fi
 
-          grep -q 'versionName = "2.2"' app/build.gradle.kts || {
-            echo "ERROR: Source không xác nhận được version 2.2."
+          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
+            echo "ERROR: app thiếu build.gradle hoặc build.gradle.kts."
             exit 1
-          }
-
-          echo "Đã tìm thấy source FLAME CLIENT v2.2."
+          fi
 
       - name: Build debug APK
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_CLIENT-v2.2-debug-apk
+          name: FLAME_CLIENT-debug-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
