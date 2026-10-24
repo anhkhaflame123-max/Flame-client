@@ -25,11 +25,12 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
@@ -49,10 +50,9 @@ jobs:
           EXTRACT="$RUNNER_TEMP/flame_extract"
           mkdir -p "$EXTRACT"
 
-          echo "Repository contents:"
+          echo "Repository files:"
           find "$WORK" -maxdepth 3 -type f | head -200
 
-          # Extract project and pack ZIP files without modifying originals.
           while IFS= read -r -d '' archive; do
             echo "Extracting: $archive"
             target="$EXTRACT/$(basename "$archive" .zip)"
@@ -63,7 +63,6 @@ jobs:
               -not -path '*/.git/*' -print0
           )
 
-          # Search extracted ZIPs first, then the repository.
           PROJECT_ROOT=""
 
           for base in "$EXTRACT" "$WORK"; do
@@ -86,7 +85,6 @@ jobs:
             )
           done
 
-          # Fallback: find a root-level Android app build file.
           if [ -z "$PROJECT_ROOT" ]; then
             for base in "$EXTRACT" "$WORK"; do
               app_build="$(
@@ -108,14 +106,11 @@ jobs:
           if [ -z "$PROJECT_ROOT" ]; then
             echo "::error::Cannot find Android Gradle project."
             echo "Expected settings.gradle(.kts) and app/build.gradle(.kts)."
-            echo "Check whether the ZIP files contain the actual project."
             exit 1
           fi
 
-          echo "Project root found: $PROJECT_ROOT"
+          echo "Project root: $PROJECT_ROOT"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-
-          echo "Project root files:"
           ls -la "$PROJECT_ROOT"
 
       - name: Build APK
@@ -124,10 +119,8 @@ jobs:
           set -euo pipefail
           cd "$PROJECT_ROOT"
 
-          echo "Building from: $(pwd)"
-
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
             ./gradlew --no-daemon assembleDebug
           else
             gradle --no-daemon assembleDebug
@@ -138,20 +131,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Searching for APK..."
-          find "$PROJECT_ROOT" -type f -name '*.apk' -print
-
           APK="$(find "$PROJECT_ROOT" \
             -type f -path '*/build/outputs/apk/debug/*.apk' \
             -print -quit)"
 
           if [ -z "$APK" ]; then
-            echo "::error::Build completed but no debug APK was found."
+            echo "::error::No debug APK found."
+            find "$PROJECT_ROOT" -type f -name '*.apk' -print
             exit 1
           fi
 
-          echo "APK found: $APK"
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          echo "Found APK: $APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
