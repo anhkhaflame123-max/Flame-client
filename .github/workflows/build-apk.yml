@@ -30,24 +30,22 @@ jobs:
           unzip -o FLAME_CLIENT_v1.6_PART2_LARGE_PACKS.zip -d /tmp/flame-part2
           echo "PART 1 and PART 2 extracted."
 
+ 
       - name: Prepare project
+        shell: bash
         run: |
           set -e
-          if [ -f /tmp/flame-part1/gradlew ]; then
-            cp -a /tmp/flame-part1/. .
-          else
-            find /tmp/flame-part1 -name gradlew -type f -print
-            echo "Could not find gradlew at expected location."
+          PROJECT_FILE=$(find /tmp/flame-part1 -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)
+
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: Cannot find Gradle project."
+            find /tmp/flame-part1 -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-      - name: Integrate large packs
-        run: |
-          set -e
-          mkdir -p app/src/main/assets/packs
-          find /tmp/flame-part2 -type f \( -name '*.mcpack' -o -name '*.mcaddon' \) \
-            -exec cp -f {} app/src/main/assets/packs/ \;
-          chmod +x gradlew
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "Project directory: $PROJECT_DIR"
+          cp -a "$PROJECT_DIR"/. .
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
