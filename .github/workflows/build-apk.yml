@@ -4,12 +4,16 @@ name: Build FLAME CLIENT APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main, master]
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -21,48 +25,59 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Extract project ZIP
-        shell: bash
-        run: |
-          set -e
-          mkdir -p /tmp/flame-part1 /tmp/flame-part2
-          unzip -o FLAME_CLIENT_v1.6_PART1_PROJECT.zip -d /tmp/flame-part1
-          unzip -o FLAME_CLIENT_v1.6_PART2_LARGE_PACKS.zip -d /tmp/flame-part2
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Prepare project
-        shell: bash
-        run: |
-          set -e
-          PROJECT_FILE=$(find /tmp/flame-part1 -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "ERROR: Cannot find settings.gradle"
-            find /tmp/flame-part1 -maxdepth 4 -type f | head -100
-            exit 1
-          fi
-          PROJECT_DIR=$(dirname "$PROJECT_FILE")
-          cp -a "$PROJECT_DIR"/. .
-          echo "Project prepared from: $PROJECT_DIR"
-          test -f app/build.gradle.kts
-
-      - name: Add large packs
-        shell: bash
-        run: |
-          set -e
-          mkdir -p app/src/main/assets/packs
-          find /tmp/flame-part2 -type f \( -name '*.mcpack' -o -name '*.mcaddon' \) \
-            -exec cp -f {} app/src/main/assets/packs/ \;
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      - name: Locate and prepare FLAME v2.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP=""
+          for f in FLAME_CLIENT_v2.2_FLARIAL_INSPIRED_FIXED_BUILD.zip FLAME_CLIENT_v2.2_FLARIAL_INSPIRED.zip; do
+            if [ -f "$f" ]; then ZIP="$f"; break; fi
+          done
+
+          if [ -n "$ZIP" ]; then
+            mkdir -p _flame_extract
+            unzip -oq "$ZIP" -d _flame_extract
+            SETTINGS="$(find _flame_extract -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+            if [ -z "$SETTINGS" ]; then
+              echo "ERROR: ZIP không có settings.gradle(.kts)"
+              exit 1
+            fi
+            ROOT="$(dirname "$SETTINGS")"
+            cp -a "$ROOT"/. .
+          fi
+
+          if [ ! -f app/build.gradle.kts ] || [ ! -f app/src/main/java/com/flameclient/android/MainActivity.kt ]; then
+            echo "ERROR: Không tìm thấy source Android FLAME CLIENT v2.2."
+            echo "Hãy kiểm tra ZIP đã được tải lên thư mục gốc repository."
+            ls -la
+            exit 1
+          fi
+
+          grep -q 'versionName = "2.2"' app/build.gradle.kts || {
+            echo "ERROR: Source không xác nhận được version 2.2."
+            exit 1
+          }
+
+          echo "Đã tìm thấy source FLAME CLIENT v2.2."
+
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME-CLIENT-APK
+          name: FLAME_CLIENT-v2.2-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          retention-days: 7
