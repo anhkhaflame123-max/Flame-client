@@ -13,7 +13,6 @@ permissions:
 
 jobs:
   build:
-    name: Build FLAME CLIENT
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -42,33 +41,41 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Locate Gradle project
+      - name: Find Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT=""
+          SETTINGS="$(find . \
+            -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -not -path './.git/*' \
+            -not -path './.github/*' \
+            -not -path '*/build/*' \
+            -print -quit)"
 
-          if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
-            ROOT="."
-          else
-            ROOT="$(find . -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -not -path './.git/*' \
-              -not -path './.github/*' \
-              -not -path './_flame_extract/*' \
-              -print -quit | xargs -r dirname)"
-          fi
-
-          if [ -z "$ROOT" ] || [ ! -d "$ROOT/app" ]; then
-            echo "ERROR: Không tìm thấy thư mục Gradle chứa app/."
-            echo "Danh sách file hiện có:"
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: Không tìm thấy settings.gradle hoặc settings.gradle.kts"
             find . -maxdepth 4 -type f | head -200
             exit 1
           fi
 
-          echo "Gradle project: $ROOT"
+          ROOT="$(dirname "$SETTINGS")"
+
+          if [ ! -d "$ROOT/app" ]; then
+            echo "ERROR: Không tìm thấy thư mục app trong $ROOT"
+            ls -la "$ROOT"
+            exit 1
+          fi
+
+          if [ ! -f "$ROOT/app/build.gradle" ] && \
+             [ ! -f "$ROOT/app/build.gradle.kts" ]; then
+            echo "ERROR: Thiếu app/build.gradle hoặc app/build.gradle.kts"
+            exit 1
+          fi
+
           echo "GRADLE_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Đã tìm thấy project: $ROOT"
 
       - name: Build APK
         shell: bash
