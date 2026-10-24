@@ -7,92 +7,54 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Check Android SDK
-        shell: bash
+      - name: Extract FLAME CLIENT ZIPs
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          test -d "$ANDROID_HOME" || {
-            echo "::error::Android SDK not found"
-            exit 1
-          }
-          ls "$ANDROID_HOME"
+          set -e
+          test -f FLAME_CLIENT_v1.6_PART1_PROJECT.zip
+          test -f FLAME_CLIENT_v1.6_PART2_LARGE_PACKS.zip
+          unzip -o FLAME_CLIENT_v1.6_PART1_PROJECT.zip -d /tmp/flame-part1
+          unzip -o FLAME_CLIENT_v1.6_PART2_LARGE_PACKS.zip -d /tmp/flame-part2
+          echo "PART 1 and PART 2 extracted."
 
-      - name: Locate project
-        shell: bash
+      - name: Prepare project
         run: |
-          set -eu
-          ROOT="$GITHUB_WORKSPACE"
-
-          echo "=== Gradle files found ==="
-          find "$ROOT" -type f \
-            \( -name settings.gradle \
-            -o -name settings.gradle.kts \
-            -o -name build.gradle \
-            -o -name build.gradle.kts \) \
-            -not -path '*/.git/*' \
-            -not -path '*/.gradle/*' -print
-
-          PROJECT_DIR=""
-
-          while IFS= read -r SETTINGS; do
-            DIR="$(dirname "$SETTINGS")"
-
-            if [ -f "$DIR/build.gradle" ] || \
-               [ -f "$DIR/build.gradle.kts" ]; then
-              PROJECT_DIR="$DIR"
-              break
-            fi
-          done < <(find "$ROOT" -type f \
-            \( -name settings.gradle \
-            -o -name settings.gradle.kts \) \
-            -not -path '*/.git/*' \
-            -not -path '*/.gradle/*' -print)
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::Cannot find Gradle project root."
+          set -e
+          if [ -f /tmp/flame-part1/gradlew ]; then
+            cp -a /tmp/flame-part1/. .
+          else
+            find /tmp/flame-part1 -name gradlew -type f -print
+            echo "Could not find gradlew at expected location."
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Selected project: $PROJECT_DIR"
-          ls -la "$PROJECT_DIR"
+      - name: Integrate large packs
+        run: |
+          set -e
+          mkdir -p app/src/main/assets/packs
+          find /tmp/flame-part2 -type f \( -name '*.mcpack' -o -name '*.mcaddon' \) \
+            -exec cp -f {} app/src/main/assets/packs/ \;
+          chmod +x gradlew
 
       - name: Build debug APK
-        shell: bash
-        run: |
-          cd "$PROJECT_DIR"
-          gradle --no-daemon --stacktrace assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-CLIENT-APK
-          path: '**/build/outputs/apk/debug/*.apk'
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 7
