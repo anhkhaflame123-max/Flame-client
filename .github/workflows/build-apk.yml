@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Java 17
@@ -42,64 +42,45 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Locate FLAME project
+      - name: Locate Gradle project
         shell: bash
         run: |
           set -euo pipefail
 
+          ROOT=""
+
           if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
-            echo "Found Gradle project at repository root."
+            ROOT="."
           else
-            ZIP=""
-            for f in \
-              FLAME_CLIENT_v2.2_FLARIAL_INSPIRED_FIXED_BUILD.zip \
-              FLAME_CLIENT_v2.2_FLARIAL_INSPIRED.zip; do
-              if [ -f "$f" ]; then
-                ZIP="$f"
-                break
-              fi
-            done
-
-            if [ -z "$ZIP" ]; then
-              echo "ERROR: Không tìm thấy Gradle project hoặc ZIP v2.2."
-              ls -la
-              exit 1
-            fi
-
-            mkdir -p _flame_extract
-            unzip -oq "$ZIP" -d _flame_extract
-
-            SETTINGS="$(find _flame_extract -type f \
+            ROOT="$(find . -type f \
               \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -print -quit)"
-
-            if [ -z "$SETTINGS" ]; then
-              echo "ERROR: ZIP không có settings.gradle(.kts)."
-              exit 1
-            fi
-
-            ROOT="$(dirname "$SETTINGS")"
-            cp -a "$ROOT"/. .
+              -not -path './.git/*' \
+              -not -path './.github/*' \
+              -not -path './_flame_extract/*' \
+              -print -quit | xargs -r dirname)"
           fi
 
-          if [ ! -d app ]; then
-            echo "ERROR: Không tìm thấy thư mục app/."
-            ls -la
+          if [ -z "$ROOT" ] || [ ! -d "$ROOT/app" ]; then
+            echo "ERROR: Không tìm thấy thư mục Gradle chứa app/."
+            echo "Danh sách file hiện có:"
+            find . -maxdepth 4 -type f | head -200
             exit 1
           fi
 
-          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
-            echo "ERROR: app thiếu build.gradle hoặc build.gradle.kts."
-            exit 1
-          fi
+          echo "Gradle project: $ROOT"
+          echo "GRADLE_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-      - name: Build debug APK
-        run: gradle --no-daemon --stacktrace assembleDebug
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GRADLE_ROOT"
+          gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: '**/build/outputs/apk/debug/*.apk'
           if-no-files-found: error
           retention-days: 7
