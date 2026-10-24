@@ -13,8 +13,9 @@ permissions:
 
 jobs:
   build:
+    name: Build FLAME CLIENT
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -27,10 +28,14 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
+          set -euo pipefail
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
@@ -41,53 +46,74 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Find Android project
+      - name: Find project and build APK
         shell: bash
         run: |
           set -euo pipefail
 
-          SETTINGS="$(find . \
-            -type f \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -not -path './.git/*' \
-            -not -path './.github/*' \
-            -not -path '*/build/*' \
-            -print -quit)"
+          echo "=== Repository files ==="
+          ls -la
+
+          SETTINGS=""
+
+          if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
+            SETTINGS="./settings.gradle"
+            [ -f settings.gradle ] || SETTINGS="./settings.gradle.kts"
+          else
+            SETTINGS="$(find . \
+              -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path './.git/*' \
+              -not -path './.github/*' \
+              -not -path '*/build/*' \
+              -print -quit)"
+          fi
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Không tìm thấy settings.gradle hoặc settings.gradle.kts"
-            find . -maxdepth 4 -type f | head -200
+            echo "ERROR: Không tìm thấy settings.gradle(.kts)."
+            echo "Repo có thể chưa chứa source project Android."
             exit 1
           fi
 
           ROOT="$(dirname "$SETTINGS")"
+          echo "Gradle root: $ROOT"
 
           if [ ! -d "$ROOT/app" ]; then
-            echo "ERROR: Không tìm thấy thư mục app trong $ROOT"
+            echo "ERROR: Không có thư mục app/ tại $ROOT"
             ls -la "$ROOT"
             exit 1
           fi
 
           if [ ! -f "$ROOT/app/build.gradle" ] && \
              [ ! -f "$ROOT/app/build.gradle.kts" ]; then
-            echo "ERROR: Thiếu app/build.gradle hoặc app/build.gradle.kts"
+            echo "ERROR: Thiếu file build Gradle của app."
             exit 1
           fi
 
-          echo "GRADLE_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Đã tìm thấy project: $ROOT"
+          cd "$ROOT"
 
-      - name: Build APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$GRADLE_ROOT"
-          gradle --no-daemon --stacktrace assembleDebug
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon --stacktrace assembleDebug
+          else
+            gradle --no-daemon --stacktrace assembleDebug
+          fi
+
+          APK="$(find app/build/outputs/apk/debug \
+            -type f -name '*.apk' -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: Build không tạo ra APK."
+            exit 1
+          fi
+
+          echo "APK_PATH=$ROOT/$APK" >> "$GITHUB_ENV"
+          echo "Build APK thành công: $APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME_CLIENT-debug-APK
-          path: '**/build/outputs/apk/debug/*.apk'
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 7
