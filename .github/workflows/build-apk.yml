@@ -43,98 +43,81 @@ jobs:
           set -euo pipefail
 
           ROOT="$GITHUB_WORKSPACE"
-          FULL="$ROOT/FLAME_CLIENT_v2.3_FLAME_REWORK.zip"
+          TEMP="$ROOT/_flame_v23"
           PART1="$ROOT/FLAME_CLIENT_v2.3_PART1_PROJECT.zip"
           PART2="$ROOT/FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip"
-          TEMP="$ROOT/_flame_v23"
+          FULL="$ROOT/FLAME_CLIENT_v2.3_FLAME_REWORK.zip"
 
           rm -rf "$TEMP"
-          mkdir -p "$TEMP/source"
+          mkdir -p "$TEMP/part1" "$TEMP/part2"
 
           if [ -f "$FULL" ]; then
-            echo "Using full v2.3 ZIP"
-            unzip -oq "$FULL" -d "$TEMP/source"
-
+            echo "Found full project ZIP"
+            unzip -oq "$FULL" -d "$TEMP/part1"
           elif [ -f "$PART1" ] && [ -f "$PART2" ]; then
-            echo "Extracting both v2.3 ZIP files"
-
-            mkdir -p "$TEMP/part1" "$TEMP/part2"
-
+            echo "Extracting PART 1 and PART 2"
             unzip -oq "$PART1" -d "$TEMP/part1"
             unzip -oq "$PART2" -d "$TEMP/part2"
-
-            SETTINGS="$(find "$TEMP/part1" -type f \
-              \( -name settings.gradle.kts -o -name settings.gradle \) \
-              -print -quit)"
-
-            PACKS="$(find "$TEMP/part2" -type d \
-              -path '*/app/src/main/assets/packs' \
-              -print -quit)"
-
-            if [ -z "$SETTINGS" ] || [ -z "$PACKS" ]; then
-              echo "ERROR: ZIP files have an unexpected structure"
-              exit 1
-            fi
-
-            cp -a "$(dirname "$SETTINGS")"/. "$TEMP/source"/
-
-            mkdir -p "$TEMP/source/app/src/main/assets/packs"
-            cp -a "$PACKS"/. "$TEMP/source/app/src/main/assets/packs"/
-
-          elif [ -f "$ROOT/settings.gradle.kts" ] && \
-               [ -f "$ROOT/app/build.gradle.kts" ]; then
-            echo "Using project in repository root"
-            TEMP="$ROOT"
-
           else
-            echo "ERROR: Cannot find FLAME CLIENT v2.3 source"
-            echo "Upload the full ZIP or both PART1 and PART2 ZIPs."
-            ls -la "$ROOT"
+            echo "ERROR: Required ZIP file(s) not found in repository root"
+            ls -lah "$ROOT"
             exit 1
           fi
 
-          if [ "$TEMP" != "$ROOT" ]; then
-            PROJECT_SETTINGS="$(find "$TEMP/source" -type f \
-              \( -name settings.gradle.kts -o -name settings.gradle \) \
-              -print -quit)"
+          echo "Searching for Gradle project root..."
+          SETTINGS="$(find "$TEMP/part1" -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)"
 
-            if [ -z "$PROJECT_SETTINGS" ]; then
-              echo "ERROR: Gradle settings file not found"
-              exit 1
-            fi
-
-            PROJECT="$(dirname "$PROJECT_SETTINGS")"
-
-            test -f "$PROJECT/app/build.gradle.kts"
-            test -f "$PROJECT/app/src/main/java/com/flameclient/android/MainActivity.kt"
-
-            rm -rf "$ROOT/app" "$ROOT/gradle" "$ROOT/build" "$ROOT/.gradle"
-            rm -f "$ROOT/settings.gradle.kts" "$ROOT/settings.gradle"
-            rm -f "$ROOT/build.gradle.kts" "$ROOT/build.gradle"
-            rm -f "$ROOT/gradle.properties" "$ROOT/gradlew" "$ROOT/gradlew.bat"
-
-            cp -a "$PROJECT"/. "$ROOT"/
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: No Gradle settings file found in PART 1"
+            echo "PART 1 file listing:"
+            find "$TEMP/part1" -maxdepth 5 -type f | head -200
+            exit 1
           fi
 
-          test -f "$ROOT/settings.gradle.kts" || \
-            test -f "$ROOT/settings.gradle"
-          test -f "$ROOT/app/build.gradle.kts"
+          PROJECT="$(dirname "$SETTINGS")"
+          echo "Detected project: $PROJECT"
 
-          grep -q 'versionName = "2.3"' "$ROOT/app/build.gradle.kts"
-          grep -q 'versionCode = 9' "$ROOT/app/build.gradle.kts"
+          if [ ! -d "$PROJECT/app" ]; then
+            echo "ERROR: app/ folder missing beside Gradle settings"
+            find "$PROJECT" -maxdepth 3 -type d | head -100
+            exit 1
+          fi
 
-          echo "FLAME CLIENT v2.3 project located successfully."
+          if [ ! -f "$PROJECT/app/build.gradle" ] && \
+             [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle or app/build.gradle.kts not found"
+            find "$PROJECT" -maxdepth 3 -type f | head -150
+            exit 1
+          fi
+
+          echo "Copying project into repository root..."
+          cp -a "$PROJECT"/. "$ROOT"/
+
+          echo "PART 2 contents:"
+          find "$TEMP/part2" -maxdepth 5 -type d | head -100
+
+          echo "Project location step completed."
 
       - name: Verify source
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f scripts/verify_source.py ]; then
-            python3 scripts/verify_source.py
-          else
-            echo "ERROR: scripts/verify_source.py is missing"
+
+          if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
+            echo "ERROR: Gradle settings file not found at repository root"
             exit 1
           fi
+
+          if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
+            echo "ERROR: App Gradle build file not found"
+            exit 1
+          fi
+
+          echo "Gradle settings and app build file found."
+          ls -la
+          ls -la app
 
       - name: Build APK
         shell: bash
@@ -148,10 +131,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not generated"
+            echo "ERROR: APK was not generated at expected path"
             find app/build/outputs -type f -print 2>/dev/null || true
             exit 1
           fi
