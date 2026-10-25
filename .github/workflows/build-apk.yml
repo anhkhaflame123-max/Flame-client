@@ -25,11 +25,15 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -40,44 +44,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           ROOT=""
-
           while IFS= read -r -d '' file; do
             candidate="${file%/*}"
-
-            if { [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; }; then
+            if [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; then
               ROOT="$candidate"
               break
             fi
-          done < <(
-            find "$GITHUB_WORKSPACE" -maxdepth 8 -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -print0
-          )
+          done < <(find "$GITHUB_WORKSPACE" -maxdepth 8 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print0)
 
           if [ -z "$ROOT" ]; then
             echo "::error::Cannot find Gradle project root with an app module."
             exit 1
           fi
 
-          echo "Found project: $ROOT"
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-      - name: Verify build environment & Gradle wrapper
+      - name: Verify Gradle wrapper
         shell: bash
         run: |
           set -euo pipefail
-          java -version
           cd "$PROJECT_ROOT"
-
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-          else
-            echo "::error::gradlew is missing from $PROJECT_ROOT"
+          if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ] || [ ! -f gradle/wrapper/gradle-wrapper.properties ]; then
+            echo "::error::Gradle wrapper files are missing."
             exit 1
           fi
-
+          chmod +x gradlew
+          java -version
           ./gradlew --version
 
       - name: Build FLAME CLIENT APK
@@ -91,19 +84,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          APK="$(find "$PROJECT_ROOT/app/build/outputs/apk" \
-            -type f -name '*.apk' -print -quit 2>/dev/null || true)"
-
+          APK="$(find "$PROJECT_ROOT/app/build/outputs/apk" -type f -name '*.apk' -print -quit 2>/dev/null || true)"
           if [ -z "$APK" ]; then
             echo "::error::APK not found after build."
-            find "$PROJECT_ROOT" -type d -path '*/build/outputs/*' -print
             exit 1
           fi
-
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
           cp "$APK" "$GITHUB_WORKSPACE/apk-output/FLAME_CLIENT-debug.apk"
-          echo "APK prepared successfully."
 
       - name: Upload FLAME CLIENT APK
         uses: actions/upload-artifact@v4
