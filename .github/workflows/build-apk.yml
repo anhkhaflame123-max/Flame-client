@@ -1,6 +1,4 @@
-
 name: Build FLAME CLIENT APK
-
 on:
   workflow_dispatch:
   push:
@@ -18,6 +16,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Extract FLAME project parts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PART1="FLAME_CLIENT_v2.2_PART1_PROJECT_AND_PACKS.zip"
+          PART2="FLAME_CLIENT_v2.2_PART2_LARGE_PACKS.zip"
+
+          test -f "$PART1" || {
+            echo "::error::Missing $PART1 in repository root"
+            exit 1
+          }
+
+          test -f "$PART2" || {
+            echo "::error::Missing $PART2 in repository root"
+            exit 1
+          }
+
+          unzip -o "$PART1" -d .
+          unzip -o "$PART2" -d .
+
+          test -f settings.gradle.kts || test -f settings.gradle || {
+            echo "::error::Cannot find Gradle project root"
+            exit 1
+          }
+
+          test -f app/build.gradle.kts || test -f app/build.gradle || {
+            echo "::error::Cannot find app Gradle build file"
+            exit 1
+          }
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -25,129 +54,26 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        shell: bash
         run: |
-          set -euo pipefail
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Find project and extract ZIP files
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Build debug APK
+        run: gradle --no-daemon assembleDebug
 
-          WORK="$GITHUB_WORKSPACE"
-          EXTRACT="$RUNNER_TEMP/flame_extract"
-          mkdir -p "$EXTRACT"
-
-          echo "Repository files:"
-          find "$WORK" -maxdepth 3 -type f | head -200
-
-          while IFS= read -r -d '' archive; do
-            echo "Extracting: $archive"
-            target="$EXTRACT/$(basename "$archive" .zip)"
-            mkdir -p "$target"
-            unzip -oq "$archive" -d "$target"
-          done < <(
-            find "$WORK" -type f -iname '*.zip' \
-              -not -path '*/.git/*' -print0
-          )
-
-          PROJECT_ROOT=""
-
-          for base in "$EXTRACT" "$WORK"; do
-            while IFS= read -r -d '' settings; do
-              candidate="$(dirname "$settings")"
-
-              if [ -d "$candidate/app" ] &&
-                 { [ -f "$candidate/app/build.gradle" ] ||
-                   [ -f "$candidate/app/build.gradle.kts" ]; }; then
-                PROJECT_ROOT="$candidate"
-                break 2
-              fi
-            done < <(
-              find "$base" \
-                \( -path '*/.git' -o -path '*/.github' -o \
-                   -path '*/build' -o -path '*/.gradle' \) -prune -o \
-                \( -name settings.gradle -o \
-                   -name settings.gradle.kts \) \
-                -type f -print0 2>/dev/null
-            )
-          done
-
-          if [ -z "$PROJECT_ROOT" ]; then
-            for base in "$EXTRACT" "$WORK"; do
-              app_build="$(
-                find "$base" \
-                  \( -path '*/.git' -o -path '*/.github' -o \
-                     -path '*/build' -o -path '*/.gradle' \) -prune -o \
-                  \( -path '*/app/build.gradle' -o \
-                     -path '*/app/build.gradle.kts' \) \
-                  -type f -print -quit 2>/dev/null || true
-              )"
-
-              if [ -n "$app_build" ]; then
-                PROJECT_ROOT="$(dirname "$(dirname "$app_build")")"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo "::error::Cannot find Android Gradle project."
-            echo "Expected settings.gradle(.kts) and app/build.gradle(.kts)."
-            exit 1
-          fi
-
-          echo "Project root: $PROJECT_ROOT"
-          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          ls -la "$PROJECT_ROOT"
-
-      - name: Build APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_ROOT"
-
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon assembleDebug
-          else
-            gradle --no-daemon assembleDebug
-          fi
-
-      - name: Locate APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="$(find "$PROJECT_ROOT" \
-            -type f -path '*/build/outputs/apk/debug/*.apk' \
-            -print -quit)"
-
-          if [ -z "$APK" ]; then
-            echo "::error::No debug APK found."
-            find "$PROJECT_ROOT" -type f -name '*.apk' -print
-            exit 1
-          fi
-
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-          echo "Found APK: $APK"
-
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME-CLIENT-APK
-          path: ${{ env.APK_PATH }}
+          name: FLAME_CLIENT-v2.2-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
