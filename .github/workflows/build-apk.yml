@@ -25,12 +25,44 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Dùng Android SDK có sẵn trên GitHub runner
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      # Giữ nguyên các gói Android SDK
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}" >> "$GITHUB_ENV"
+
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+
+          if [ ! -d "$SDK" ]; then
+            echo "ERROR: Android SDK directory not found: $SDK"
+            exit 1
+          fi
+
+          echo "Android SDK found at: $SDK"
+          ls -la "$SDK"
+
       - name: Install Android SDK packages
-        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -1 || true)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found in $SDK/cmdline-tools"
+            find "$SDK" -maxdepth 4 -type f -name sdkmanager 2>/dev/null || true
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -64,14 +96,12 @@ jobs:
             exit 1
           fi
 
-          echo "Searching for Gradle project root..."
           SETTINGS="$(find "$TEMP/part1" -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
             -print -quit)"
 
           if [ -z "$SETTINGS" ]; then
             echo "ERROR: No Gradle settings file found in PART 1"
-            echo "PART 1 file listing:"
             find "$TEMP/part1" -maxdepth 5 -type f | head -200
             exit 1
           fi
@@ -87,18 +117,15 @@ jobs:
 
           if [ ! -f "$PROJECT/app/build.gradle" ] && \
              [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle or app/build.gradle.kts not found"
+            echo "ERROR: app Gradle build file not found"
             find "$PROJECT" -maxdepth 3 -type f | head -150
             exit 1
           fi
 
-          echo "Copying project into repository root..."
           cp -a "$PROJECT"/. "$ROOT"/
 
           echo "PART 2 contents:"
           find "$TEMP/part2" -maxdepth 5 -type d | head -100
-
-          echo "Project location step completed."
 
       - name: Verify source
         shell: bash
@@ -115,7 +142,7 @@ jobs:
             exit 1
           fi
 
-          echo "Gradle settings and app build file found."
+          echo "Gradle project found."
           ls -la
           ls -la app
 
@@ -135,7 +162,7 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not generated at expected path"
+            echo "ERROR: APK was not generated"
             find app/build/outputs -type f -print 2>/dev/null || true
             exit 1
           fi
