@@ -23,13 +23,42 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+      - name: Set up Android SDK & Environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Setting up Android SDK..."
+
+          export ANDROID_HOME="$HOME/android-sdk"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          mkdir -p "$RUNNER_TEMP/android-tools"
+
+          curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -o "$RUNNER_TEMP/commandlinetools.zip"
+
+          unzip -q "$RUNNER_TEMP/commandlinetools.zip" \
+            -d "$RUNNER_TEMP/android-tools"
+
+          # Di chuyển đúng chuẩn cấu trúc sdkmanager (bin và lib nằm trực tiếp trong latest)
+          mv "$RUNNER_TEMP/android-tools/bin" "$ANDROID_HOME/cmdline-tools/latest/"
+          mv "$RUNNER_TEMP/android-tools/lib" "$ANDROID_HOME/cmdline-tools/latest/"
+          [ -f "$RUNNER_TEMP/android-tools/source.properties" ] && mv "$RUNNER_TEMP/android-tools/source.properties" "$ANDROID_HOME/cmdline-tools/latest/" || true
+          [ -f "$RUNNER_TEMP/android-tools/NOTICE.txt" ] && mv "$RUNNER_TEMP/android-tools/NOTICE.txt" "$ANDROID_HOME/cmdline-tools/latest/" || true
+
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses
+
+          sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -43,21 +72,22 @@ jobs:
 
           ROOT=""
 
-          while IFS= read -r file; do
+          while IFS= read -r -d '' file; do
             candidate="${file%/*}"
 
-            if [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; then
+            if { [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; }; then
               ROOT="$candidate"
               break
             fi
           done < <(
             find "$GITHUB_WORKSPACE" -maxdepth 8 -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) -print
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -print0
           )
 
           if [ -z "$ROOT" ]; then
             echo "::error::Cannot find Gradle project root with an app module."
-            find "$GITHUB_WORKSPACE" -maxdepth 4 -type f | head -n 200
+            find "$GITHUB_WORKSPACE" -maxdepth 5 -type f | head -n 200
             exit 1
           fi
 
@@ -68,15 +98,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           java -version
           cd "$PROJECT_ROOT"
+
           if [ -f "gradlew" ]; then
             chmod +x gradlew
           else
             echo "::error::gradlew is missing from $PROJECT_ROOT"
             exit 1
           fi
+
           ./gradlew --version
+
+          echo "Project root: $PROJECT_ROOT"
           ls -la
           ls -la app
 
@@ -84,6 +119,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$PROJECT_ROOT"
           ./gradlew --no-daemon assembleDebug
 
@@ -102,8 +138,11 @@ jobs:
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
-          cp "$APK" "$GITHUB_WORKSPACE/apk-output/FLAME_CLIENT-debug.apk"
-          echo "APK prepared: FLAME_CLIENT-debug.apk"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/FLAME_CLIENT-debug.apk"
+
+          echo "APK prepared successfully."
 
       - name: Upload FLAME CLIENT APK
         uses: actions/upload-artifact@v4
