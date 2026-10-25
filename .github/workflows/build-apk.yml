@@ -25,13 +25,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -47,7 +45,7 @@ jobs:
           ROOT=""
           while IFS= read -r file; do
             candidate="${file%/*}"
-            if [ -f "$candidate/app/build.gradle" ] \vert{}\vert{} [ -f "$candidate/app/build.gradle.kts" ]; then
+            if [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; then
               ROOT="$candidate"
               break
             fi
@@ -92,4 +90,18 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "::error::Build finished but no debug APK was found."
-            find "$PROJECT_ROOT" -type d -path '*/build
+            find "$PROJECT_ROOT" -type d -path '*/build/outputs/*' -print
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/apk-output"
+          cp "$APK" "$GITHUB_WORKSPACE/apk-output/FLAME_CLIENT-debug.apk"
+          echo "APK found and prepared for upload."
+
+      - name: Upload FLAME CLIENT APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLAME_CLIENT-debug-APK
+          path: apk-output/FLAME_CLIENT-debug.apk
+          if-no-files-found: error
+          retention-days: 7
