@@ -1,17 +1,19 @@
-name: Build FLAME CLIENT APK
+
+name: Build FLAME CLIENT v2.3 APK
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main, master]
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build FLAME CLIENT v2.3
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -24,96 +26,144 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
+      # Giữ nguyên các gói Android SDK
       - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || test "${PIPESTATUS[1]}" -eq 0
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
-
-      - name: Extract ZIP project and packs
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-          shopt -s globstar nullglob
-          for zipfile in "$GITHUB_WORKSPACE"/**/*.zip; do
-            [[ "$zipfile" == "$GITHUB_WORKSPACE/extracted/"* ]] && continue
-            dest="$GITHUB_WORKSPACE/extracted/$(basename "${zipfile%.zip}")"
-            mkdir -p "$dest"
-            echo "Extracting: $zipfile"
-            unzip -oq "$zipfile" -d "$dest"
-          done
-          echo "ZIP extraction finished."
-          find "$GITHUB_WORKSPACE" -maxdepth 8 \
-            \( -name settings.gradle -o -name settings.gradle.kts \) -print
-
-      - name: Locate FLAME CLIENT project
-        shell: bash
-        run: |
-          set -euo pipefail
-          ROOT=""
-          while IFS= read -r -d '' file; do
-            candidate="${file%/*}"
-            if { [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; } &&
-               [ -f "$candidate/settings.gradle" -o -f "$candidate/settings.gradle.kts" ]; then
-              ROOT="$candidate"
-              break
-            fi
-          done < <(find "$GITHUB_WORKSPACE" -maxdepth 12 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print0)
-
-          if [ -z "$ROOT" ]; then
-            echo "::error::Could not find the Android project. Make sure the ZIP files are uploaded and contain the project."
-            find "$GITHUB_WORKSPACE" -maxdepth 5 -type f | head -200
-            exit 1
-          fi
-
-          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
-          echo "Found project: $ROOT"
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Verify Gradle wrapper
+      - name: Locate FLAME CLIENT v2.3 project
         shell: bash
         run: |
           set -euo pipefail
-          cd "$PROJECT_ROOT"
-          if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 8.9
-          fi
-          chmod +x gradlew
-          ./gradlew --version
 
-      - name: Build FLAME CLIENT APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_ROOT"
-          ./gradlew --no-daemon assembleDebug
+          ROOT="$GITHUB_WORKSPACE"
+          FULL="$ROOT/FLAME_CLIENT_v2.3_FLAME_REWORK.zip"
+          PART1="$ROOT/FLAME_CLIENT_v2.3_PART1_PROJECT.zip"
+          PART2="$ROOT/FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip"
+          TEMP="$ROOT/_flame_v23"
 
-      - name: Find and prepare APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="$(find "$PROJECT_ROOT/app/build/outputs/apk" -type f -name '*.apk' -print -quit 2>/dev/null || true)"
-          if [ -z "$APK" ]; then
-            echo "::error::APK not found after build."
+          rm -rf "$TEMP"
+          mkdir -p "$TEMP/source"
+
+          if [ -f "$FULL" ]; then
+            echo "Using full v2.3 ZIP"
+            unzip -oq "$FULL" -d "$TEMP/source"
+
+          elif [ -f "$PART1" ] && [ -f "$PART2" ]; then
+            echo "Extracting both v2.3 ZIP files"
+
+            mkdir -p "$TEMP/part1" "$TEMP/part2"
+
+            unzip -oq "$PART1" -d "$TEMP/part1"
+            unzip -oq "$PART2" -d "$TEMP/part2"
+
+            SETTINGS="$(find "$TEMP/part1" -type f \
+              \( -name settings.gradle.kts -o -name settings.gradle \) \
+              -print -quit)"
+
+            PACKS="$(find "$TEMP/part2" -type d \
+              -path '*/app/src/main/assets/packs' \
+              -print -quit)"
+
+            if [ -z "$SETTINGS" ] || [ -z "$PACKS" ]; then
+              echo "ERROR: ZIP files have an unexpected structure"
+              exit 1
+            fi
+
+            cp -a "$(dirname "$SETTINGS")"/. "$TEMP/source"/
+
+            mkdir -p "$TEMP/source/app/src/main/assets/packs"
+            cp -a "$PACKS"/. "$TEMP/source/app/src/main/assets/packs"/
+
+          elif [ -f "$ROOT/settings.gradle.kts" ] && \
+               [ -f "$ROOT/app/build.gradle.kts" ]; then
+            echo "Using project in repository root"
+            TEMP="$ROOT"
+
+          else
+            echo "ERROR: Cannot find FLAME CLIENT v2.3 source"
+            echo "Upload the full ZIP or both PART1 and PART2 ZIPs."
+            ls -la "$ROOT"
             exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE/apk-output"
-          cp "$APK" "$GITHUB_WORKSPACE/apk-output/FLAME_CLIENT-debug.apk"
 
-      - name: Upload FLAME CLIENT APK
+          if [ "$TEMP" != "$ROOT" ]; then
+            PROJECT_SETTINGS="$(find "$TEMP/source" -type f \
+              \( -name settings.gradle.kts -o -name settings.gradle \) \
+              -print -quit)"
+
+            if [ -z "$PROJECT_SETTINGS" ]; then
+              echo "ERROR: Gradle settings file not found"
+              exit 1
+            fi
+
+            PROJECT="$(dirname "$PROJECT_SETTINGS")"
+
+            test -f "$PROJECT/app/build.gradle.kts"
+            test -f "$PROJECT/app/src/main/java/com/flameclient/android/MainActivity.kt"
+
+            rm -rf "$ROOT/app" "$ROOT/gradle" "$ROOT/build" "$ROOT/.gradle"
+            rm -f "$ROOT/settings.gradle.kts" "$ROOT/settings.gradle"
+            rm -f "$ROOT/build.gradle.kts" "$ROOT/build.gradle"
+            rm -f "$ROOT/gradle.properties" "$ROOT/gradlew" "$ROOT/gradlew.bat"
+
+            cp -a "$PROJECT"/. "$ROOT"/
+          fi
+
+          test -f "$ROOT/settings.gradle.kts" || \
+            test -f "$ROOT/settings.gradle"
+          test -f "$ROOT/app/build.gradle.kts"
+
+          grep -q 'versionName = "2.3"' "$ROOT/app/build.gradle.kts"
+          grep -q 'versionCode = 9' "$ROOT/app/build.gradle.kts"
+
+          echo "FLAME CLIENT v2.3 project located successfully."
+
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f scripts/verify_source.py ]; then
+            python3 scripts/verify_source.py
+          else
+            echo "ERROR: scripts/verify_source.py is missing"
+            exit 1
+          fi
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          gradle --version
+          gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK was not generated"
+            find app/build/outputs -type f -print 2>/dev/null || true
+            exit 1
+          fi
+
+          mkdir -p artifact
+          cp "$APK" artifact/FLAME_CLIENT-v2.3-debug.apk
+          sha256sum artifact/FLAME_CLIENT-v2.3-debug.apk
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_CLIENT-debug-APK
-          path: apk-output/FLAME_CLIENT-debug.apk
+          name: FLAME_CLIENT-v2.3-debug-apk
+          path: artifact/FLAME_CLIENT-v2.3-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
