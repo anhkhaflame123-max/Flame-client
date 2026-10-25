@@ -4,9 +4,8 @@ name: Build FLAME CLIENT APK
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '**'
-      - '.github/workflows/build-apk.yml'
+    branches:
+      - main
 
 jobs:
   build:
@@ -16,68 +15,60 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # GIỮ NGUYÊN PHẦN SDK CỦA BẠN Ở ĐÂY
-      # Đặt nguyên bước cài SDK hiện tại của bạn tại vị trí này.
-
-      - name: Locate and extract FLAME project
+      - name: Extract FLAME CLIENT project
         shell: bash
         run: |
           set -e
 
-          echo "=== Files in repository ==="
-          find . -maxdepth 3 -type f | sort | head -200
-
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -type f \
-            -name 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
+          PROJECT_ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 2 \
+            -type f -name 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
             -print -quit)"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::Không tìm thấy FLAME_CLIENT_v2.3_PART1_PROJECT.zip"
+          if [ -z "$PROJECT_ZIP" ]; then
+            echo "::error::Không tìm thấy file PART1_PROJECT.zip."
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name '*.zip' -print
             exit 1
           fi
 
-          PROJECT_PARENT="$RUNNER_TEMP/flame_project"
-          mkdir -p "$PROJECT_PARENT"
+          mkdir -p "$RUNNER_TEMP/flame_project"
+          unzip -oq "$PROJECT_ZIP" -d "$RUNNER_TEMP/flame_project"
 
-          echo "=== Extracting project ZIP ==="
-          unzip -o "$ZIP_FILE" -d "$PROJECT_PARENT"
+          echo "PROJECT_DIR=$RUNNER_TEMP/flame_project" >> "$GITHUB_ENV"
 
-          echo "=== Searching for Gradle settings ==="
-          SETTINGS_FILE="$(find "$PROJECT_PARENT" -type f \
-            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
-            -print -quit)"
+          echo "=== Đã giải nén dự án ==="
+          find "$RUNNER_TEMP/flame_project" -maxdepth 3 -type f \
+            \( -name 'settings.gradle' \
+            -o -name 'settings.gradle.kts' \
+            -o -name 'build.gradle' \
+            -o -name 'build.gradle.kts' \
+            -o -name 'gradlew' \) -print
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::Không tìm thấy settings.gradle hoặc settings.gradle.kts trong ZIP PART1"
-            echo "Kiểm tra lại cấu trúc file ZIP."
-            exit 1
-          fi
+      # GIỮ NGUYÊN BƯỚC CÀI ĐẶT ANDROID SDK HIỆN TẠI Ở ĐÂY
 
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
-
-          echo "Gradle project root: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "=== Project root contents ==="
-          ls -la "$PROJECT_DIR"
-
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "::error::Không tìm thấy thư mục app trong Gradle project root"
-            exit 1
-          fi
-
-      - name: Locate Gradle wrapper
+      - name: Locate Gradle Wrapper
         shell: bash
         run: |
           set -e
 
-          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            echo "::error::Không tìm thấy gradlew trong thư mục dự án."
-            echo "ZIP có thể thiếu Gradle Wrapper; cần kiểm tra cấu trúc dự án trước khi build."
+          echo "=== Tìm gradlew trong toàn bộ dự án ==="
+          WRAPPER="$(find "$PROJECT_DIR" -type f -name 'gradlew' -print -quit)"
+
+          if [ -n "$WRAPPER" ]; then
+            PROJECT_DIR="$(dirname "$WRAPPER")"
+            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+            chmod +x "$WRAPPER"
+            echo "Đã tìm thấy Gradle Wrapper: $WRAPPER"
+          else
+            echo "::error::Không tìm thấy gradlew trong ZIP."
+            echo "=== Các file Gradle tìm thấy ==="
+            find "$PROJECT_DIR" -type f \
+              \( -name 'settings.gradle' \
+              -o -name 'settings.gradle.kts' \
+              -o -name 'build.gradle' \
+              -o -name 'build.gradle.kts' \
+              -o -name 'gradle-wrapper.properties' \) -print
             exit 1
           fi
-
-          chmod +x "$PROJECT_DIR/gradlew"
 
       - name: Build debug APK
         shell: bash
