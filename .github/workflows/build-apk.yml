@@ -6,10 +6,6 @@ on:
   push:
     branches:
       - main
-      - master
-
-permissions:
-  contents: read
 
 jobs:
   build:
@@ -19,163 +15,64 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # Android SDK: Android 35 / Build Tools 35.0.0
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # GIỮ NGUYÊN BLOCK SET UP SDK CŨ CỦA BRO Ở ĐÂY
 
-      - name: Install Android SDK packages
+      - name: Locate project
         shell: bash
         run: |
-          set -Eeuo pipefail
-          yes | sdkmanager --licenses || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          set -e
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+          echo "=== Repository root ==="
+          pwd
+          ls -la
 
-      - name: Locate FLAME CLIENT v2.3 project
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+          echo "=== Searching for Gradle project ==="
 
-          ROOT="$GITHUB_WORKSPACE"
-          WORK="$RUNNER_TEMP/flame-project"
-          mkdir -p "$WORK"
-
-          echo "=== ZIP files in repository ==="
-          find "$ROOT" -maxdepth 3 -type f -iname '*.zip' -print
-
-          FULL="$(find "$ROOT" -maxdepth 3 -type f \
-            -iname 'FLAME_CLIENT_v2.3_FLAME_REWORK.zip' \
-            -print -quit || true)"
-
-          PART1="$(find "$ROOT" -maxdepth 3 -type f \
-            -iname 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
-            -print -quit || true)"
-
-          PART2="$(find "$ROOT" -maxdepth 3 -type f \
-            -iname 'FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip' \
-            -print -quit || true)"
-
-          mkdir -p "$WORK/extracted"
-
-          if [ -n "$FULL" ]; then
-            echo "Found full project ZIP."
-            unzip -q "$FULL" -d "$WORK/extracted"
-
-          elif [ -n "$PART1" ] && [ -n "$PART2" ]; then
-            echo "Found PART1 and PART2."
-            mkdir -p "$WORK/part1" "$WORK/part2"
-
-            unzip -q "$PART1" -d "$WORK/part1"
-            unzip -q "$PART2" -d "$WORK/part2"
-
-            # PART1 contains the project; preserve its files.
-            cp -a "$WORK/part1/." "$WORK/extracted/"
-
-            # Add files from PART2 without overwriting PART1 files.
-            cp -an "$WORK/part2/." "$WORK/extracted/"
-
-          else
-            echo "::error::Cannot find the full ZIP or both PART1 and PART2."
-            echo "Upload the ZIP files to the repository root."
-            exit 1
-          fi
-
-          echo "=== Find Gradle settings file ==="
-          SETTINGS="$(find "$WORK/extracted" -type f \
+          SETTINGS_FILE="$(find . \
+            -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -not -path '*/.gradle/*' \
+            -not -path '*/build/*' \
             -print -quit)"
 
-          if [ -z "$SETTINGS" ]; then
-            echo "::error::settings.gradle or settings.gradle.kts not found."
-            find "$WORK/extracted" -maxdepth 5 -type f -print | head -200
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "::error::Không tìm thấy settings.gradle hoặc settings.gradle.kts"
+            echo "Hãy kiểm tra ZIP đã giải nén đúng vào repository chưa."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS")"
-          echo "Project root: $PROJECT_DIR"
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          if [ ! -d "$PROJECT_DIR/app" ]; then
-            echo "::error::The Gradle project root has no app directory."
-            find "$PROJECT_DIR" -maxdepth 3 -type d -print
+          echo "Tìm thấy Gradle project tại: $PROJECT_DIR"
+
+          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
+            echo "::error::Không có gradlew tại thư mục Gradle root: $PROJECT_DIR"
+            echo "Danh sách file trong thư mục:"
+            ls -la "$PROJECT_DIR"
             exit 1
           fi
 
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "::error::app/build.gradle or app/build.gradle.kts not found."
-            find "$PROJECT_DIR/app" -maxdepth 4 -type f -print
-            exit 1
-          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          chmod +x "$PROJECT_DIR/gradlew"
 
-          echo "=== Copy project into workspace ==="
-          if [ "$PROJECT_DIR" != "$ROOT" ]; then
-            cp -a "$PROJECT_DIR/." "$ROOT/"
-          fi
-
-          echo "=== Verify Gradle wrapper ==="
-          if [ ! -f "$ROOT/gradlew" ]; then
-            echo "::error::gradlew is missing from the project root."
-            find "$ROOT" -maxdepth 4 -type f \
-              \( -name gradlew -o -name settings.gradle \
-              -o -name settings.gradle.kts \) -print
-            exit 1
-          fi
-
-          if [ ! -f "$ROOT/gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "::error::Gradle wrapper properties are missing."
-            exit 1
-          fi
-
-          chmod +x "$ROOT/gradlew"
-
-          echo "=== Project files ==="
-          ls -la "$ROOT"
-          ls -la "$ROOT/app"
-
-          echo "Project located successfully."
-
-      - name: Check Gradle version
+      - name: Build debug APK
         shell: bash
         run: |
-          set -Eeuo pipefail
-          ./gradlew --version
+          set -e
+          cd "$PROJECT_DIR"
+          ./gradlew --no-daemon assembleDebug
 
-      - name: Build FLAME CLIENT debug APK
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          ./gradlew --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK" ]; then
-            echo "::error::APK was not generated at $APK"
-            find app/build/outputs -maxdepth 6 -type f -print || true
-            exit 1
-          fi
-
-          ls -lh "$APK"
-
-      - name: Upload FLAME CLIENT APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-CLIENT-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 7
