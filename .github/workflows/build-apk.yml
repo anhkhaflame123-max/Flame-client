@@ -31,7 +31,7 @@ jobs:
             platforms;android-35
             build-tools;35.0.0
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
@@ -42,19 +42,20 @@ jobs:
           set -euo pipefail
 
           echo "Searching for Gradle project..."
-          find . -maxdepth 6 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
+          find . -maxdepth 8 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
 
           ROOT=""
           while IFS= read -r file; do
             candidate="${file%/*}"
-            if [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; then
+            if { [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; } \
+              && [ -f "$candidate/gradlew" ]; then
               ROOT="$candidate"
               break
             fi
-          done < <(find . -maxdepth 6 -type f \( -name settings.gradle -o -name settings.gradle.kts \))
+          done < <(find . -maxdepth 8 -type f \( -name settings.gradle -o -name settings.gradle.kts \))
 
           if [ -z "$ROOT" ]; then
-            echo "::error::Could not find a Gradle root containing settings.gradle and app/build.gradle."
+            echo "::error::Could not find a Gradle root with settings file, app module, and Gradle wrapper."
             echo "Check that the project files are committed to the repository."
             exit 1
           fi
@@ -69,8 +70,7 @@ jobs:
           cd "$PROJECT_ROOT"
 
           if [ ! -f gradlew ]; then
-            echo "::error::gradlew is missing from the project root ($PROJECT_ROOT)."
-            echo "Make sure you have committed gradlew and gradle/wrapper/ files to your repository."
+            echo "::error::gradlew is missing from the project root."
             exit 1
           fi
 
