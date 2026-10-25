@@ -4,8 +4,9 @@ name: Build FLAME CLIENT APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    paths:
+      - '**'
+      - '.github/workflows/build-apk.yml'
 
 jobs:
   build:
@@ -15,51 +16,67 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+      # GIỮ NGUYÊN PHẦN SDK CỦA BẠN Ở ĐÂY
+      # Đặt nguyên bước cài SDK hiện tại của bạn tại vị trí này.
 
-      # GIỮ NGUYÊN BLOCK SET UP SDK CŨ CỦA BRO Ở ĐÂY
-
-      - name: Locate project
+      - name: Locate and extract FLAME project
         shell: bash
         run: |
           set -e
 
-          echo "=== Repository root ==="
-          pwd
-          ls -la
+          echo "=== Files in repository ==="
+          find . -maxdepth 3 -type f | sort | head -200
 
-          echo "=== Searching for Gradle project ==="
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -type f \
+            -name 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
+            -print -quit)"
 
-          SETTINGS_FILE="$(find . \
-            -type f \
-            \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -not -path '*/.gradle/*' \
-            -not -path '*/build/*' \
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::Không tìm thấy FLAME_CLIENT_v2.3_PART1_PROJECT.zip"
+            exit 1
+          fi
+
+          PROJECT_PARENT="$RUNNER_TEMP/flame_project"
+          mkdir -p "$PROJECT_PARENT"
+
+          echo "=== Extracting project ZIP ==="
+          unzip -o "$ZIP_FILE" -d "$PROJECT_PARENT"
+
+          echo "=== Searching for Gradle settings ==="
+          SETTINGS_FILE="$(find "$PROJECT_PARENT" -type f \
+            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
             -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::Không tìm thấy settings.gradle hoặc settings.gradle.kts"
-            echo "Hãy kiểm tra ZIP đã giải nén đúng vào repository chưa."
+            echo "::error::Không tìm thấy settings.gradle hoặc settings.gradle.kts trong ZIP PART1"
+            echo "Kiểm tra lại cấu trúc file ZIP."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
-          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          echo "Tìm thấy Gradle project tại: $PROJECT_DIR"
+          echo "Gradle project root: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            echo "::error::Không có gradlew tại thư mục Gradle root: $PROJECT_DIR"
-            echo "Danh sách file trong thư mục:"
-            ls -la "$PROJECT_DIR"
+          echo "=== Project root contents ==="
+          ls -la "$PROJECT_DIR"
+
+          if [ ! -d "$PROJECT_DIR/app" ]; then
+            echo "::error::Không tìm thấy thư mục app trong Gradle project root"
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - name: Locate Gradle wrapper
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
+            echo "::error::Không tìm thấy gradlew trong thư mục dự án."
+            echo "ZIP có thể thiếu Gradle Wrapper; cần kiểm tra cấu trúc dự án trước khi build."
+            exit 1
+          fi
+
           chmod +x "$PROJECT_DIR/gradlew"
 
       - name: Build debug APK
