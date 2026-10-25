@@ -23,23 +23,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK (Using Runner Built-in SDK)
-        shell: bash
-        run: |
-          echo "Configuring pre-installed Android SDK..."
-          
-          # Biến môi trường ANDROID_SDK_ROOT đã có sẵn trên GitHub Actions Ubuntu runner
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_ENV
-          
-          # Thiết lập biến cho phiên làm việc hiện tại
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-          
-          # Tự động đồng ý cấp phép license và cài đặt các gói SDK cần thiết
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -51,59 +41,62 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Searching for Gradle project..."
-          find . -maxdepth 8 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
-
           ROOT=""
+
           while IFS= read -r file; do
             candidate="${file%/*}"
-            if { [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; } \
-              && [ -f "$candidate/gradlew" ]; then
+
+            if [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; then
               ROOT="$candidate"
               break
             fi
-          done < <(find . -maxdepth 8 -type f \( -name settings.gradle -o -name settings.gradle.kts \))
+          done < <(
+            find "$GITHUB_WORKSPACE" -maxdepth 8 -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) -print
+          )
 
           if [ -z "$ROOT" ]; then
-            echo "::error::Could not find a Gradle root with settings file, app module, and Gradle wrapper."
-            echo "Check that the project files are committed to the repository."
+            echo "::error::Cannot find Gradle project root with an app module."
+            find "$GITHUB_WORKSPACE" -maxdepth 4 -type f | head -n 200
             exit 1
           fi
 
-          echo "Project root: $ROOT"
+          echo "Found project: $ROOT"
           echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
 
-      - name: Prepare Gradle wrapper
+      - name: Verify build environment
         shell: bash
         run: |
           set -euo pipefail
+          java -version
           cd "$PROJECT_ROOT"
-
-          if [ ! -f gradlew ]; then
-            echo "::error::gradlew is missing from the project root."
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+          else
+            echo "::error::gradlew is missing from $PROJECT_ROOT"
             exit 1
           fi
-
-          chmod +x gradlew
+          ./gradlew --version
+          ls -la
+          ls -la app
 
       - name: Build FLAME CLIENT APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_ROOT"
-
-          ./gradlew --no-daemon --version
           ./gradlew --no-daemon assembleDebug
 
-      - name: Find APK
+      - name: Find and prepare APK
         shell: bash
         run: |
           set -euo pipefail
 
-          APK="$(find "$PROJECT_ROOT" -type f -path '*/build/outputs/apk/debug/*.apk' -print -quit)"
+          APK="$(find "$PROJECT_ROOT/app/build/outputs/apk" \
+            -type f -name '*.apk' -print -quit 2>/dev/null || true)"
 
           if [ -z "$APK" ]; then
-            echo "::error::No debug APK was found."
+            echo "::error::APK not found after build."
             find "$PROJECT_ROOT" -type d -path '*/build/outputs/*' -print
             exit 1
           fi
