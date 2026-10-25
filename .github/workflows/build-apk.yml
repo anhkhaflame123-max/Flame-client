@@ -1,100 +1,181 @@
 
+name: Build FLAME CLIENT APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Android SDK: Android 35 / Build Tools 35.0.0
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          yes | sdkmanager --licenses || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Locate FLAME CLIENT v2.3 project
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
 
           ROOT="$GITHUB_WORKSPACE"
-          TEMP="$ROOT/_flame_v23"
+          WORK="$RUNNER_TEMP/flame-project"
+          mkdir -p "$WORK"
 
-          PART1="$ROOT/FLAME_CLIENT_v2.3_PART1_PROJECT.zip"
-          PART2="$ROOT/FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip"
-          FULL="$ROOT/FLAME_CLIENT_v2.3_FLAME_REWORK.zip"
+          echo "=== ZIP files in repository ==="
+          find "$ROOT" -maxdepth 3 -type f -iname '*.zip' -print
 
-          rm -rf "$TEMP"
-          mkdir -p "$TEMP/part1" "$TEMP/part2" "$TEMP/merged"
+          FULL="$(find "$ROOT" -maxdepth 3 -type f \
+            -iname 'FLAME_CLIENT_v2.3_FLAME_REWORK.zip' \
+            -print -quit || true)"
 
-          if [ -f "$FULL" ]; then
-            echo "Found full project ZIP"
-            unzip -oq "$FULL" -d "$TEMP/part1"
-          elif [ -f "$PART1" ] && [ -f "$PART2" ]; then
-            echo "Found both project ZIP parts"
-            unzip -oq "$PART1" -d "$TEMP/part1"
-            unzip -oq "$PART2" -d "$TEMP/part2"
+          PART1="$(find "$ROOT" -maxdepth 3 -type f \
+            -iname 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
+            -print -quit || true)"
+
+          PART2="$(find "$ROOT" -maxdepth 3 -type f \
+            -iname 'FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip' \
+            -print -quit || true)"
+
+          mkdir -p "$WORK/extracted"
+
+          if [ -n "$FULL" ]; then
+            echo "Found full project ZIP."
+            unzip -q "$FULL" -d "$WORK/extracted"
+
+          elif [ -n "$PART1" ] && [ -n "$PART2" ]; then
+            echo "Found PART1 and PART2."
+            mkdir -p "$WORK/part1" "$WORK/part2"
+
+            unzip -q "$PART1" -d "$WORK/part1"
+            unzip -q "$PART2" -d "$WORK/part2"
+
+            # PART1 contains the project; preserve its files.
+            cp -a "$WORK/part1/." "$WORK/extracted/"
+
+            # Add files from PART2 without overwriting PART1 files.
+            cp -an "$WORK/part2/." "$WORK/extracted/"
+
           else
-            echo "ERROR: Missing required ZIP files."
-            find "$ROOT" -maxdepth 3 -type f -printf '%P\n' | head -200
+            echo "::error::Cannot find the full ZIP or both PART1 and PART2."
+            echo "Upload the ZIP files to the repository root."
             exit 1
           fi
 
-          echo "=== Search for Gradle settings ==="
-
-          SETTINGS="$(find "$TEMP/part1" -type f \
+          echo "=== Find Gradle settings file ==="
+          SETTINGS="$(find "$WORK/extracted" -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -not -path '*/.gradle/*' \
             -print -quit)"
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: No settings.gradle(.kts) found in PART 1."
-            find "$TEMP/part1" -maxdepth 7 -print | head -300
+            echo "::error::settings.gradle or settings.gradle.kts not found."
+            find "$WORK/extracted" -maxdepth 5 -type f -print | head -200
             exit 1
           fi
 
-          PROJECT="$(dirname "$SETTINGS")"
-          echo "Detected project root: $PROJECT"
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "Project root: $PROJECT_DIR"
 
-          if [ ! -f "$PROJECT/app/build.gradle" ] && \
-             [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
-            echo "ERROR: app Gradle build file not found beside settings."
-            find "$PROJECT" -maxdepth 6 -print | head -300
+          if [ ! -d "$PROJECT_DIR/app" ]; then
+            echo "::error::The Gradle project root has no app directory."
+            find "$PROJECT_DIR" -maxdepth 3 -type d -print
             exit 1
           fi
 
-          cp -a "$PROJECT"/. "$TEMP/merged"/
-
-          echo "=== Merge PART 2 files without replacing existing project files ==="
-
-          if [ -d "$TEMP/part2" ]; then
-            PART2_SETTINGS="$(find "$TEMP/part2" -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) \
-              -not -path '*/.gradle/*' \
-              -print -quit || true)"
-
-            if [ -n "$PART2_SETTINGS" ]; then
-              PART2_ROOT="$(dirname "$PART2_SETTINGS")"
-            else
-              PART2_ROOT="$TEMP/part2"
-            fi
-
-            cp -an "$PART2_ROOT"/. "$TEMP/merged"/
-          fi
-
-          echo "=== Validate merged project ==="
-
-          if [ ! -f "$TEMP/merged/settings.gradle" ] && \
-             [ ! -f "$TEMP/merged/settings.gradle.kts" ]; then
-            echo "ERROR: Gradle settings missing after merge."
-            find "$TEMP/merged" -maxdepth 5 -print | head -300
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "::error::app/build.gradle or app/build.gradle.kts not found."
+            find "$PROJECT_DIR/app" -maxdepth 4 -type f -print
             exit 1
           fi
 
-          if [ ! -d "$TEMP/merged/app" ]; then
-            echo "ERROR: app directory missing after merge."
-            find "$TEMP/merged" -maxdepth 6 -print | head -300
+          echo "=== Copy project into workspace ==="
+          if [ "$PROJECT_DIR" != "$ROOT" ]; then
+            cp -a "$PROJECT_DIR/." "$ROOT/"
+          fi
+
+          echo "=== Verify Gradle wrapper ==="
+          if [ ! -f "$ROOT/gradlew" ]; then
+            echo "::error::gradlew is missing from the project root."
+            find "$ROOT" -maxdepth 4 -type f \
+              \( -name gradlew -o -name settings.gradle \
+              -o -name settings.gradle.kts \) -print
             exit 1
           fi
 
-          if [ ! -f "$TEMP/merged/app/build.gradle" ] && \
-             [ ! -f "$TEMP/merged/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle(.kts) missing after merge."
-            find "$TEMP/merged/app" -maxdepth 6 -print | head -300
+          if [ ! -f "$ROOT/gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "::error::Gradle wrapper properties are missing."
             exit 1
           fi
 
-          cp -an "$TEMP/merged"/. "$ROOT"/
+          chmod +x "$ROOT/gradlew"
 
-          echo "=== Final Gradle project ==="
+          echo "=== Project files ==="
           ls -la "$ROOT"
           ls -la "$ROOT/app"
 
-          echo "Project root located successfully."
+          echo "Project located successfully."
+
+      - name: Check Gradle version
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ./gradlew --version
+
+      - name: Build FLAME CLIENT debug APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK was not generated at $APK"
+            find app/build/outputs -maxdepth 6 -type f -print || true
+            exit 1
+          fi
+
+          ls -lh "$APK"
+
+      - name: Upload FLAME CLIENT APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLAME-CLIENT-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
