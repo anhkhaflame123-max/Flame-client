@@ -1,79 +1,102 @@
 name: Build FLAME CLIENT APK
+
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+workflow_dispatch:
+push:
+branches:
+- main
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+build:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+```
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Extract FLAME project parts
-        shell: bash
-        run: |
-          set -euo pipefail
+  - name: Extract FLAME project parts
+    shell: bash
+    run: |
+      set -euo pipefail
 
-          PART1="FLAME_CLIENT_v2.2_PART1_PROJECT_AND_PACKS.zip"
-          PART2="FLAME_CLIENT_v2.2_PART2_LARGE_PACKS.zip"
+      PART1="FLAME_CLIENT_v2.2_PART1_PROJECT_AND_PACKS.zip"
+      PART2="FLAME_CLIENT_v2.2_PART2_LARGE_PACKS.zip"
 
-          test -f "$PART1" || {
-            echo "::error::Missing $PART1 in repository root"
-            exit 1
-          }
+      test -f "$PART1" || {
+        echo "::error::Missing $PART1 in repository root"
+        exit 1
+      }
 
-          test -f "$PART2" || {
-            echo "::error::Missing $PART2 in repository root"
-            exit 1
-          }
+      test -f "$PART2" || {
+        echo "::error::Missing $PART2 in repository root"
+        exit 1
+      }
 
-          unzip -o "$PART1" -d .
-          unzip -o "$PART2" -d .
+      unzip -o "$PART1" -d .
+      unzip -o "$PART2" -d .
 
-          test -f settings.gradle.kts || test -f settings.gradle || {
-            echo "::error::Cannot find Gradle project root"
-            exit 1
-          }
+      test -f settings.gradle.kts || test -f settings.gradle || {
+        echo "::error::Cannot find Gradle project root"
+        exit 1
+      }
 
-          test -f app/build.gradle.kts || test -f app/build.gradle || {
-            echo "::error::Cannot find app Gradle build file"
-            exit 1
-          }
+      test -f app/build.gradle.kts || test -f app/build.gradle || {
+        echo "::error::Cannot find app Gradle build file"
+        exit 1
+      }
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+      echo "Project root:"
+      pwd
+      ls -la
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+  - name: Set up Java 17
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
+  - name: Set up Android SDK
+    shell: bash
+    run: |
+      set -euo pipefail
 
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      echo "ANDROID_HOME=${ANDROID_HOME:-$HOME/android-sdk}" >> "$GITHUB_ENV"
+      echo "ANDROID_SDK_ROOT=${ANDROID_HOME:-$HOME/android-sdk}" >> "$GITHUB_ENV"
 
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      mkdir -p "${ANDROID_HOME:-$HOME/android-sdk}/cmdline-tools"
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FLAME_CLIENT-v2.2-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 7
+      echo "Android SDK path configured."
+
+  - name: Install Android SDK packages
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      sdkmanager "platform-tools"
+      sdkmanager "platforms;android-35"
+      sdkmanager "build-tools;35.0.0"
+
+  - name: Set up Gradle 8.9
+    uses: gradle/actions/setup-gradle@v4
+    with:
+      gradle-version: '8.9'
+
+  - name: Build debug APK
+    shell: bash
+    run: |
+      set -euo pipefail
+      gradle --version
+      gradle --no-daemon assembleDebug
+
+  - name: Upload debug APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: FLAME_CLIENT-v2.2-debug-apk
+      path: app/build/outputs/apk/debug/*.apk
+      if-no-files-found: error
+      retention-days: 7
+```
