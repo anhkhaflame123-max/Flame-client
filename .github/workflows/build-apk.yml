@@ -1,75 +1,4 @@
 
-name: Build FLAME CLIENT v2.3 APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [main, master]
-
-permissions:
-  contents: read
-
-jobs:
-  build:
-    name: Build FLAME CLIENT v2.3
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # Giữ nguyên phần Android SDK theo workflow ban đầu
-      - name: Set up Android SDK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}" >> "$GITHUB_ENV"
-
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-
-          if [ ! -d "$SDK" ]; then
-            echo "ERROR: Android SDK directory not found: $SDK"
-            exit 1
-          fi
-
-          echo "Android SDK found at: $SDK"
-          ls -la "$SDK"
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          SDKMANAGER="$(find "$SDK/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -1 || true)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found in $SDK/cmdline-tools"
-            find "$SDK" -maxdepth 5 -type f -name sdkmanager 2>/dev/null || true
-            exit 1
-          fi
-
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-
-          "$SDKMANAGER" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
       - name: Locate FLAME CLIENT v2.3 project
         shell: bash
         run: |
@@ -82,173 +11,90 @@ jobs:
           PART2="$ROOT/FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip"
           FULL="$ROOT/FLAME_CLIENT_v2.3_FLAME_REWORK.zip"
 
-          # Dọn thư mục giải nén cũ để tránh dùng nhầm dữ liệu.
           rm -rf "$TEMP"
-          mkdir -p "$TEMP/part1" "$TEMP/part2"
+          mkdir -p "$TEMP/part1" "$TEMP/part2" "$TEMP/merged"
 
-          # Ưu tiên ZIP đầy đủ nếu có; nếu không thì dùng cả hai phần.
           if [ -f "$FULL" ]; then
-            echo "Found full project ZIP: $FULL"
+            echo "Found full project ZIP"
             unzip -oq "$FULL" -d "$TEMP/part1"
-
           elif [ -f "$PART1" ] && [ -f "$PART2" ]; then
-            echo "Found PART 1 and PART 2"
+            echo "Found both project ZIP parts"
             unzip -oq "$PART1" -d "$TEMP/part1"
             unzip -oq "$PART2" -d "$TEMP/part2"
-
           else
-            echo "ERROR: Không tìm thấy bộ ZIP cần thiết."
-            echo "Các file hiện có trong repository:"
-            find "$ROOT" -maxdepth 2 -type f -printf '%P\n' | head -200
+            echo "ERROR: Missing required ZIP files."
+            find "$ROOT" -maxdepth 3 -type f -printf '%P\n' | head -200
             exit 1
           fi
 
-          echo "=== Nội dung giải nén PART 1 ==="
-          find "$TEMP/part1" -maxdepth 4 -type f | head -200
+          echo "=== Search for Gradle settings ==="
 
-          # Tìm Gradle settings trong thư mục đã giải nén.
           SETTINGS="$(find "$TEMP/part1" -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
             -not -path '*/.gradle/*' \
             -print -quit)"
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Không tìm thấy settings.gradle hoặc settings.gradle.kts."
-            echo "Cấu trúc thư mục PART 1:"
-            find "$TEMP/part1" -maxdepth 6 -print | head -300
+            echo "ERROR: No settings.gradle(.kts) found in PART 1."
+            find "$TEMP/part1" -maxdepth 7 -print | head -300
             exit 1
           fi
 
           PROJECT="$(dirname "$SETTINGS")"
           echo "Detected project root: $PROJECT"
 
-          # Kiểm tra app nằm cạnh file settings.
-          if [ ! -d "$PROJECT/app" ]; then
-            echo "ERROR: Không tìm thấy thư mục app cạnh file settings."
-            find "$PROJECT" -maxdepth 5 -print | head -250
-            exit 1
-          fi
-
           if [ ! -f "$PROJECT/app/build.gradle" ] && \
              [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
-            echo "ERROR: Không tìm thấy app/build.gradle hoặc app/build.gradle.kts."
-            find "$PROJECT/app" -maxdepth 5 -type f | head -200
+            echo "ERROR: app Gradle build file not found beside settings."
+            find "$PROJECT" -maxdepth 6 -print | head -300
             exit 1
           fi
 
-          # Chép project đã xác định vào repository root.
-          # Không chép thư mục tạm _flame_v23 vào chính nó.
-          cp -a "$PROJECT"/. "$ROOT"/
+          cp -a "$PROJECT"/. "$TEMP/merged"/
 
-          echo "=== Kiểm tra project tại repository root ==="
+          echo "=== Merge PART 2 files without replacing existing project files ==="
 
-          if [ ! -f "$ROOT/settings.gradle" ] && \
-             [ ! -f "$ROOT/settings.gradle.kts" ]; then
-            echo "ERROR: Gradle settings chưa nằm ở repository root sau khi chép."
+          if [ -d "$TEMP/part2" ]; then
+            PART2_SETTINGS="$(find "$TEMP/part2" -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path '*/.gradle/*' \
+              -print -quit || true)"
+
+            if [ -n "$PART2_SETTINGS" ]; then
+              PART2_ROOT="$(dirname "$PART2_SETTINGS")"
+            else
+              PART2_ROOT="$TEMP/part2"
+            fi
+
+            cp -an "$PART2_ROOT"/. "$TEMP/merged"/
+          fi
+
+          echo "=== Validate merged project ==="
+
+          if [ ! -f "$TEMP/merged/settings.gradle" ] && \
+             [ ! -f "$TEMP/merged/settings.gradle.kts" ]; then
+            echo "ERROR: Gradle settings missing after merge."
+            find "$TEMP/merged" -maxdepth 5 -print | head -300
             exit 1
           fi
 
-          if [ ! -d "$ROOT/app" ]; then
-            echo "ERROR: Không tìm thấy app/ sau khi chép project."
+          if [ ! -d "$TEMP/merged/app" ]; then
+            echo "ERROR: app directory missing after merge."
+            find "$TEMP/merged" -maxdepth 6 -print | head -300
             exit 1
           fi
 
-          if [ ! -f "$ROOT/app/build.gradle" ] && \
-             [ ! -f "$ROOT/app/build.gradle.kts" ]; then
-            echo "ERROR: Không tìm thấy build file của app sau khi chép."
+          if [ ! -f "$TEMP/merged/app/build.gradle" ] && \
+             [ ! -f "$TEMP/merged/app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle(.kts) missing after merge."
+            find "$TEMP/merged/app" -maxdepth 6 -print | head -300
             exit 1
           fi
 
-          echo "=== Cấu trúc PART 2 ==="
-          find "$TEMP/part2" -maxdepth 6 -print | head -250
+          cp -an "$TEMP/merged"/. "$ROOT"/
 
-          echo "=== Các thư mục có tên packs trong PART 2 ==="
-          find "$TEMP/part2" -type d -iname packs -print || true
+          echo "=== Final Gradle project ==="
+          ls -la "$ROOT"
+          ls -la "$ROOT/app"
 
-          echo "Project đã được tìm thấy và chép thành công."
-
-      - name: Verify source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== Kiểm tra môi trường ==="
-          java -version
-          gradle --version
-
-          echo "=== Kiểm tra Gradle project ==="
-
-          if [ ! -f settings.gradle ] && \
-             [ ! -f settings.gradle.kts ]; then
-            echo "ERROR: Không tìm thấy Gradle settings tại thư mục gốc."
-            pwd
-            ls -la
-            exit 1
-          fi
-
-          if [ ! -f app/build.gradle ] && \
-             [ ! -f app/build.gradle.kts ]; then
-            echo "ERROR: Không tìm thấy app Gradle build file."
-            ls -la
-            ls -la app || true
-            exit 1
-          fi
-
-          echo "=== Project root ==="
-          pwd
-          ls -la
-
-          echo "=== App directory ==="
-          ls -la app
-
-          echo "=== Gradle settings ==="
-          if [ -f settings.gradle.kts ]; then
-            sed -n '1,200p' settings.gradle.kts
-          else
-            sed -n '1,200p' settings.gradle
-          fi
-
-      - name: Build APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== Java ==="
-          java -version
-
-          echo "=== Gradle ==="
-          gradle --version
-
-          echo "=== Build FLAME CLIENT APK ==="
-          gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: Không tìm thấy APK tại đường dẫn dự kiến."
-            echo "Các APK hoặc file output hiện có:"
-            find app/build/outputs -type f -print 2>/dev/null || true
-            exit 1
-          fi
-
-          mkdir -p artifact
-          cp "$APK" artifact/FLAME_CLIENT-v2.3-debug.apk
-
-          echo "=== APK size ==="
-          ls -lh artifact/FLAME_CLIENT-v2.3-debug.apk
-
-          echo "=== SHA-256 ==="
-          sha256sum artifact/FLAME_CLIENT-v2.3-debug.apk
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FLAME_CLIENT-v2.3-debug-apk
-          path: artifact/FLAME_CLIENT-v2.3-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+          echo "Project root located successfully."
