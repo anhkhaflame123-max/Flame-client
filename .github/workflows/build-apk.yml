@@ -13,19 +13,16 @@ jobs:
 build:
 runs-on: ubuntu-latest
 
-```
 steps:
   - name: Checkout repository
     uses: actions/checkout@v4
 
-  - name: Test workflow
+  - name: Check repository
     shell: bash
     run: |
-      set -euo pipefail
-      echo "Workflow started successfully"
-      echo "Repository directory:"
+      set -e
+      echo "Workflow started"
       pwd
-      echo "Repository files:"
       ls -la
 
   - name: Set up Java 17
@@ -40,7 +37,6 @@ steps:
   - name: Install Android SDK packages
     shell: bash
     run: |
-      set -euo pipefail
       sdkmanager "platform-tools"
       sdkmanager "platforms;android-35"
       sdkmanager "build-tools;35.0.0"
@@ -61,34 +57,30 @@ steps:
       if [ -f "$PART1" ] && [ -f "$PART2" ]; then
         unzip -o "$PART1" -d .
         unzip -o "$PART2" -d .
-      else
-        echo "ZIP parts not found; checking existing repository files."
       fi
 
       if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
-        echo "::error::Gradle settings file not found in repository root."
+        echo "::error::Cannot find settings.gradle or settings.gradle.kts"
         find . -maxdepth 5 -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \)
         exit 1
       fi
 
       if [ ! -f app/build.gradle.kts ] && [ ! -f app/build.gradle ]; then
-        echo "::error::App Gradle build file not found."
-        find . -maxdepth 5 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \)
+        echo "::error::Cannot find app Gradle build file"
         exit 1
       fi
 
-  - name: Build debug APK
+  - name: Build APK
     shell: bash
     run: |
       set -euo pipefail
       gradle --version
       gradle --no-daemon assembleDebug
 
-  - name: Upload debug APK
+  - name: Upload APK
     uses: actions/upload-artifact@v4
     with:
       name: FLAME_CLIENT-debug-APK
       path: app/build/outputs/apk/debug/*.apk
       if-no-files-found: error
       retention-days: 7
-```
