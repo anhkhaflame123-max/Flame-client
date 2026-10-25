@@ -20,67 +20,102 @@ jobs:
         run: |
           set -e
 
-          PROJECT_ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 2 \
-            -type f -name 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
+          PROJECT_ZIP="$(find "$GITHUB_WORKSPACE" \
+            -maxdepth 3 -type f \
+            -name 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
             -print -quit)"
 
           if [ -z "$PROJECT_ZIP" ]; then
             echo "::error::Không tìm thấy file PART1_PROJECT.zip."
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name '*.zip' -print
+            echo "=== Các file ZIP hiện có ==="
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 4 -type f -name '*.zip' -print
             exit 1
           fi
 
+          echo "ZIP: $PROJECT_ZIP"
+
           mkdir -p "$RUNNER_TEMP/flame_project"
-          unzip -oq "$PROJECT_ZIP" -d "$RUNNER_TEMP/flame_project"
+          unzip -oq "$PROJECT_ZIP" \
+            -d "$RUNNER_TEMP/flame_project"
 
-          echo "PROJECT_DIR=$RUNNER_TEMP/flame_project" >> "$GITHUB_ENV"
+          echo "PROJECT_DIR=$RUNNER_TEMP/flame_project" \
+            >> "$GITHUB_ENV"
 
-          echo "=== Đã giải nén dự án ==="
-          find "$RUNNER_TEMP/flame_project" -maxdepth 3 -type f \
-            \( -name 'settings.gradle' \
-            -o -name 'settings.gradle.kts' \
-            -o -name 'build.gradle' \
-            -o -name 'build.gradle.kts' \
-            -o -name 'gradlew' \) -print
+          echo "=== Cấu trúc file sau giải nén ==="
+          find "$RUNNER_TEMP/flame_project" \
+            -maxdepth 5 -type f | sort | head -n 300
 
-      # GIỮ NGUYÊN BƯỚC CÀI ĐẶT ANDROID SDK HIỆN TẠI Ở ĐÂY
+      # GIỮ NGUYÊN BƯỚC CÀI ĐẶT ANDROID SDK HIỆN TẠI
+      # Nếu workflow cũ có bước cài SDK thật,
+      # hãy giữ nguyên toàn bộ bước đó tại vị trí này.
 
-      - name: Locate Gradle Wrapper
+      - name: Locate Gradle Project
         shell: bash
         run: |
           set -e
 
-          echo "=== Tìm gradlew trong toàn bộ dự án ==="
-          WRAPPER="$(find "$PROJECT_DIR" -type f -name 'gradlew' -print -quit)"
+          ROOT="$RUNNER_TEMP/flame_project"
 
-          if [ -n "$WRAPPER" ]; then
-            PROJECT_DIR="$(dirname "$WRAPPER")"
-            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-            chmod +x "$WRAPPER"
-            echo "Đã tìm thấy Gradle Wrapper: $WRAPPER"
+          echo "=== Tìm thư mục dự án Gradle ==="
+
+          SETTINGS="$(find "$ROOT" -type f \
+            \( -name 'settings.gradle' \
+            -o -name 'settings.gradle.kts' \) \
+            -print -quit)"
+
+          if [ -n "$SETTINGS" ]; then
+            PROJECT_DIR="$(dirname "$SETTINGS")"
           else
-            echo "::error::Không tìm thấy gradlew trong ZIP."
-            echo "=== Các file Gradle tìm thấy ==="
-            find "$PROJECT_DIR" -type f \
-              \( -name 'settings.gradle' \
-              -o -name 'settings.gradle.kts' \
-              -o -name 'build.gradle' \
-              -o -name 'build.gradle.kts' \
-              -o -name 'gradle-wrapper.properties' \) -print
-            exit 1
+            BUILD_FILE="$(find "$ROOT" -type f \
+              \( -name 'build.gradle' \
+              -o -name 'build.gradle.kts' \) \
+              -print -quit)"
+
+            if [ -n "$BUILD_FILE" ]; then
+              PROJECT_DIR="$(dirname "$BUILD_FILE")"
+            else
+              echo "::error::ZIP không có settings.gradle hoặc build.gradle."
+              echo "=== File trong ZIP ==="
+              find "$ROOT" -maxdepth 6 -type f | sort | head -n 500
+              exit 1
+            fi
           fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Thư mục dự án: $PROJECT_DIR"
+          echo "=== Các file Gradle ==="
+          find "$PROJECT_DIR" -maxdepth 4 -type f \
+            \( -name 'gradlew' \
+            -o -name 'settings.gradle' \
+            -o -name 'settings.gradle.kts' \
+            -o -name 'build.gradle' \
+            -o -name 'build.gradle.kts' \
+            -o -name 'gradle-wrapper.properties' \) -print
 
       - name: Build debug APK
         shell: bash
         run: |
           set -e
           cd "$PROJECT_DIR"
-          ./gradlew --no-daemon assembleDebug
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon assembleDebug
+          elif [ -f "settings.gradle" ] \
+            || [ -f "settings.gradle.kts" ]; then
+            echo "::error::Có cấu hình Gradle nhưng thiếu gradlew."
+            echo "Cần bổ sung Gradle Wrapper hoặc cài Gradle phù hợp."
+            exit 1
+          else
+            echo "::error::Không tìm thấy cấu hình dự án Gradle."
+            exit 1
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-CLIENT-APK
-          path: |
-            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
