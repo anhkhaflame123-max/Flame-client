@@ -12,15 +12,20 @@ contents: read
 jobs:
 build:
 runs-on: ubuntu-latest
-steps:
-- name: Checkout repository
-uses: actions/checkout@v4
 
 ```
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
+
   - name: Test workflow
+    shell: bash
     run: |
+      set -euo pipefail
       echo "Workflow started successfully"
+      echo "Repository directory:"
       pwd
+      echo "Repository files:"
       ls -la
 
   - name: Set up Java 17
@@ -33,7 +38,9 @@ uses: actions/checkout@v4
     uses: android-actions/setup-android@v3
 
   - name: Install Android SDK packages
+    shell: bash
     run: |
+      set -euo pipefail
       sdkmanager "platform-tools"
       sdkmanager "platforms;android-35"
       sdkmanager "build-tools;35.0.0"
@@ -43,24 +50,39 @@ uses: actions/checkout@v4
     with:
       gradle-version: '8.9'
 
-  - name: Locate Gradle project
+  - name: Extract FLAME project parts
     shell: bash
     run: |
       set -euo pipefail
-      echo "Searching for Gradle files..."
-      find . -maxdepth 5 -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \)
-      find . -maxdepth 5 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \)
-      if [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ]; then
-        echo "::error::Gradle settings file missing from repository root"
+
+      PART1="FLAME_CLIENT_v2.2_PART1_PROJECT_AND_PACKS.zip"
+      PART2="FLAME_CLIENT_v2.2_PART2_LARGE_PACKS.zip"
+
+      if [ -f "$PART1" ] && [ -f "$PART2" ]; then
+        unzip -o "$PART1" -d .
+        unzip -o "$PART2" -d .
+      else
+        echo "ZIP parts not found; checking existing repository files."
+      fi
+
+      if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
+        echo "::error::Gradle settings file not found in repository root."
+        find . -maxdepth 5 -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \)
         exit 1
       fi
-      if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
-        echo "::error::App Gradle build file missing"
+
+      if [ ! -f app/build.gradle.kts ] && [ ! -f app/build.gradle ]; then
+        echo "::error::App Gradle build file not found."
+        find . -maxdepth 5 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \)
         exit 1
       fi
 
   - name: Build debug APK
-    run: gradle --no-daemon assembleDebug
+    shell: bash
+    run: |
+      set -euo pipefail
+      gradle --version
+      gradle --no-daemon assembleDebug
 
   - name: Upload debug APK
     uses: actions/upload-artifact@v4
@@ -69,3 +91,4 @@ uses: actions/checkout@v4
       path: app/build/outputs/apk/debug/*.apk
       if-no-files-found: error
       retention-days: 7
+```
