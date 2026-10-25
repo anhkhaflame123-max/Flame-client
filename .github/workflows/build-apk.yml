@@ -13,6 +13,7 @@ jobs:
 build:
 runs-on: ubuntu-latest
 
+```
 steps:
   - name: Checkout repository
     uses: actions/checkout@v4
@@ -27,6 +28,7 @@ steps:
     uses: android-actions/setup-android@v3
 
   - name: Install Android SDK packages
+    shell: bash
     run: |
       sdkmanager "platform-tools"
       sdkmanager "platforms;android-35"
@@ -41,14 +43,22 @@ steps:
     shell: bash
     run: |
       set -euo pipefail
-      echo "Repository root:"
-      pwd
-      find . -maxdepth 4 \( -name settings.gradle -o -name settings.gradle.kts \) -print
 
-      ROOT="$(find . -maxdepth 4 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -printf '%h\n' | head -n 1)"
+      echo "Searching for Gradle project..."
+      find . -maxdepth 6 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
+
+      ROOT=""
+      while IFS= read -r file; do
+        candidate="${file%/*}"
+        if [ -f "$candidate/app/build.gradle" ] || [ -f "$candidate/app/build.gradle.kts" ]; then
+          ROOT="$candidate"
+          break
+        fi
+      done < <(find . -maxdepth 6 -type f \( -name settings.gradle -o -name settings.gradle.kts \))
 
       if [ -z "$ROOT" ]; then
-        echo "::error::Cannot find Gradle project root."
+        echo "::error::Cannot locate a Gradle root containing settings.gradle and app/build.gradle."
+        echo "Check that the FLAME CLIENT project files are committed to the repository."
         exit 1
       fi
 
@@ -61,18 +71,31 @@ steps:
       set -euo pipefail
       cd "$PROJECT_ROOT"
 
-      if [ ! -f app/build.gradle ] && [ ! -f app/build.gradle.kts ]; then
-        echo "::error::Cannot find app/build.gradle or app/build.gradle.kts."
+      gradle --no-daemon --version
+      gradle --no-daemon assembleDebug
+
+  - name: Find APK
+    shell: bash
+    run: |
+      set -euo pipefail
+
+      APK="$(find "$PROJECT_ROOT" -type f -path '*/build/outputs/apk/debug/*.apk' | head -n 1)"
+
+      if [ -z "$APK" ]; then
+        echo "::error::Build finished but no debug APK was found."
+        find "$PROJECT_ROOT" -type d -path '*/build/outputs/*' -print
         exit 1
       fi
 
-      gradle --no-daemon assembleDebug
+      mkdir -p "$GITHUB_WORKSPACE/apk-output"
+      cp "$APK" "$GITHUB_WORKSPACE/apk-output/FLAME_CLIENT-debug.apk"
+      echo "APK found and prepared for upload."
 
   - name: Upload FLAME CLIENT APK
     uses: actions/upload-artifact@v4
     with:
       name: FLAME_CLIENT-debug-APK
-      path: "**/app/build/outputs/apk/debug/*.apk"
+      path: apk-output/FLAME_CLIENT-debug.apk
       if-no-files-found: error
       retention-days: 7
 ```
