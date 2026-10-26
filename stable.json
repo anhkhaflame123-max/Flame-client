@@ -1,0 +1,17 @@
+{
+  "channel": "stable",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "minLauncherVersion": "1.0.0",
+  "minecraft": {
+    "supportedVersions": [
+      "1.26.52"
+    ],
+    "nativeModulesEnabled": false
+  },
+  "releaseUrl": "https://github.com/anhkhaflame123-max/Flame-client/releases",
+  "apkUrl": "",
+  "sha256": "",
+  "mandatory": false,
+  "releaseNotes": "Bản Stable đầu tiên. Module native chưa được bật cho đến khi được kiểm thử tương thích."
+}
