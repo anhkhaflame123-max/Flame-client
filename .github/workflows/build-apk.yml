@@ -113,11 +113,24 @@ jobs:
 
           APP_GRADLE="app/build.gradle.kts"
           [ -f "$APP_GRADLE" ] || APP_GRADLE="app/build.gradle"
+
           test -f settings.gradle.kts || test -f settings.gradle
           test -f app/src/main/java/com/flameclient/android/MainActivity.kt
           grep -q 'versionName = "3.0"' "$APP_GRADLE"
           grep -q 'versionCode = 10' "$APP_GRADLE"
 
+          PACK_COUNT="$(find app/src/main/assets/packs -type f | wc -l | tr -d ' ')"
+          if [ "$PACK_COUNT" -lt 1 ]; then
+            echo "ERROR: No pack files after merge."
+            exit 1
+          fi
+
+          # IMPORTANT: Validate original v3.0 source BEFORE changing its version.
+          if [ -f scripts/verify_source.py ]; then
+            python3 scripts/verify_source.py
+          fi
+
+          # Only change the version after source validation succeeds.
           python3 - "$APP_GRADLE" <<'PY'
           import re, sys
           from pathlib import Path
@@ -143,17 +156,7 @@ jobs:
           mkdir -p app/src/main/assets/updates
           cp updates/stable.json app/src/main/assets/updates/stable.json
 
-          PACK_COUNT="$(find app/src/main/assets/packs -type f | wc -l | tr -d ' ')"
-          if [ "$PACK_COUNT" -lt 1 ]; then
-            echo "ERROR: No pack files after merge."
-            exit 1
-          fi
-
           echo "FLAME_PACK_FILE_COUNT=$PACK_COUNT" >> "$GITHUB_ENV"
-
-          if [ -f scripts/verify_source.py ]; then
-            python3 scripts/verify_source.py
-          fi
 
       - name: Build debug APK
         shell: bash
