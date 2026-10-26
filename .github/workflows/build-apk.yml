@@ -1,17 +1,17 @@
 
-name: Build FLAME CLIENT v3.0 APK
+name: Build FLAME CLIENT v3.0.1 APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Verify and build FLAME CLIENT v3.0
+    name: Verify and build FLAME CLIENT v3.0.1
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -69,14 +69,11 @@ jobs:
           PART2="$(find "$WS" -type d \( -name .git -o -path "$STAGE" \) -prune -o -type f -name 'FLAME_CLIENT_v3.0_PART2_LARGE_PACKS*.zip' -print | sort | head -n 1 || true)"
 
           if [ -z "$PART1" ] || [ -z "$PART2" ]; then
-            echo "ERROR: Required v3.0 ZIPs were not both found."
-            echo "Expected: FLAME_CLIENT_v3.0_PART1_PROJECT.zip and FLAME_CLIENT_v3.0_PART2_LARGE_PACKS.zip"
+            echo "ERROR: Both v3.0 ZIP files are required."
             find "$WS" -maxdepth 2 -type f -printf '%P (%s bytes)\n' | sort
             exit 1
           fi
 
-          echo "Project ZIP: $PART1"
-          echo "Large packs ZIP: $PART2"
           unzip -tq "$PART1"
           unzip -tq "$PART2"
           unzip -oq "$PART1" -d "$STAGE/part1"
@@ -98,20 +95,14 @@ jobs:
           done < <(find "$STAGE/part1" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print | sort)
 
           if [ -z "$PROJECT_ROOT" ]; then
-            echo "ERROR: No valid v3.0 Gradle project found in Part 1."
+            echo "ERROR: No valid v3.0 Gradle project found."
             find "$STAGE/part1" -maxdepth 8 -type f -print | head -120 || true
             exit 1
           fi
-          echo "Project root: $PROJECT_ROOT"
 
           PACK_DIR="$(find "$STAGE/part2" -type d -path '*/app/src/main/assets/packs' -print -quit || true)"
-          if [ -z "$PACK_DIR" ]; then
-            echo "ERROR: Part 2 does not contain app/src/main/assets/packs."
-            find "$STAGE/part2" -maxdepth 8 -type f -print | head -120 || true
-            exit 1
-          fi
-          if ! find "$PACK_DIR" -type f -print -quit | grep -q .; then
-            echo "ERROR: Part 2 pack directory is empty."
+          if [ -z "$PACK_DIR" ] || ! find "$PACK_DIR" -type f -print -quit | grep -q .; then
+            echo "ERROR: Part 2 pack directory missing or empty."
             exit 1
           fi
 
@@ -127,13 +118,38 @@ jobs:
           grep -q 'versionName = "3.0"' "$APP_GRADLE"
           grep -q 'versionCode = 10' "$APP_GRADLE"
 
+          python3 - "$APP_GRADLE" <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          p = Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8")
+          s, names = re.subn(r'versionName\s*=\s*"3\.0"', 'versionName = "3.0.1"', s, count=1)
+          s, codes = re.subn(r'versionCode\s*=\s*10\b', 'versionCode = 11', s, count=1)
+
+          if names != 1 or codes != 1:
+              raise SystemExit(
+                  f"Version change failed: name={names}, code={codes}"
+              )
+
+          p.write_text(s, encoding="utf-8")
+          PY
+
+          if [ ! -s "updates/stable.json" ]; then
+            echo "ERROR: updates/stable.json missing or empty."
+            exit 1
+          fi
+
+          mkdir -p app/src/main/assets/updates
+          cp updates/stable.json app/src/main/assets/updates/stable.json
+
           PACK_COUNT="$(find app/src/main/assets/packs -type f | wc -l | tr -d ' ')"
           if [ "$PACK_COUNT" -lt 1 ]; then
             echo "ERROR: No pack files after merge."
             exit 1
           fi
+
           echo "FLAME_PACK_FILE_COUNT=$PACK_COUNT" >> "$GITHUB_ENV"
-          echo "Merged source ready: $PACK_COUNT pack files."
 
           if [ -f scripts/verify_source.py ]; then
             python3 scripts/verify_source.py
@@ -152,6 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+
           if [ ! -s "$APK_PATH" ]; then
             echo "ERROR: APK was not produced."
             find app/build/outputs -maxdepth 5 -type f -print 2>/dev/null || true
@@ -160,19 +177,24 @@ jobs:
 
           APK_PACK_COUNT="$(unzip -Z1 "$APK_PATH" | grep -c '^assets/packs/' || true)"
           if [ "$APK_PACK_COUNT" -lt "$FLAME_PACK_FILE_COUNT" ]; then
-            echo "ERROR: Source has $FLAME_PACK_FILE_COUNT pack files, APK has $APK_PACK_COUNT."
+            echo "ERROR: Pack files missing from APK."
             exit 1
           fi
 
+          unzip -Z1 "$APK_PATH" | grep -qx 'assets/updates/stable.json' || {
+            echo "ERROR: Stable manifest missing from APK."
+            exit 1
+          }
+
           mkdir -p artifact
-          cp "$APK_PATH" artifact/FLAME_CLIENT-v3.0-debug.apk
-          du -h artifact/FLAME_CLIENT-v3.0-debug.apk
-          sha256sum artifact/FLAME_CLIENT-v3.0-debug.apk
+          cp "$APK_PATH" artifact/FLAME_CLIENT-v3.0.1-debug.apk
+          sha256sum artifact/FLAME_CLIENT-v3.0.1-debug.apk
+          du -h artifact/FLAME_CLIENT-v3.0.1-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_CLIENT-v3.0-debug-apk
-          path: artifact/FLAME_CLIENT-v3.0-debug.apk
+          name: FLAME_CLIENT-v3.0.1-debug-apk
+          path: artifact/FLAME_CLIENT-v3.0.1-debug.apk
           if-no-files-found: error
           retention-days: 14
