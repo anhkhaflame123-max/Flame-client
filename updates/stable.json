@@ -1,7 +1,8 @@
+
 {
   "channel": "stable",
-  "version": "1.0.0",
-  "versionCode": 1,
+  "version": "3.0.1",
+  "versionCode": 11,
   "minLauncherVersion": "1.0.0",
   "minecraft": {
     "supportedVersions": [
@@ -13,5 +14,5 @@
   "apkUrl": "",
   "sha256": "",
   "mandatory": false,
-  "releaseNotes": "Bản Stable đầu tiên. Module native chưa được bật cho đến khi được kiểm thử tương thích."
+  "releaseNotes": "FLAME CLIENT 3.0.1: cập nhật mã phiên bản và đóng gói manifest Stable. Tự động kiểm tra cập nhật cần được triển khai trong mã Launcher."
 }
