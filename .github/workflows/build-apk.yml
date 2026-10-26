@@ -1,121 +1,176 @@
-
-name: Build FLAME CLIENT APK
+name: Build FLAME CLIENT v2.3 APK
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main, master ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Verify and build FLAME CLIENT v2.3
     runs-on: ubuntu-latest
-
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract FLAME CLIENT project
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Keep the Android SDK package selection unchanged.
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Select and assemble v2.3 source (never build an older fallback)
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+          WS="$GITHUB_WORKSPACE"
+          STAGE="$WS/.flame_source_stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
 
-          PROJECT_ZIP="$(find "$GITHUB_WORKSPACE" \
-            -maxdepth 3 -type f \
-            -name 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' \
-            -print -quit)"
+          # Search recursively: uploaded ZIPs may be in a subfolder in the repository.
+          find_file() {
+            local pattern="$1"
+            find "$WS" -type d -name .git -prune -o \
+              -type d -path "$STAGE" -prune -o \
+              -type f -name "$pattern" -print -quit
+          }
 
-          if [ -z "$PROJECT_ZIP" ]; then
-            echo "::error::Không tìm thấy file PART1_PROJECT.zip."
-            echo "=== Các file ZIP hiện có ==="
-            find "$GITHUB_WORKSPACE" \
-              -maxdepth 4 -type f -name '*.zip' -print
-            exit 1
-          fi
+          # Identify the real project root by the settings file AND app sources.
+          # This avoids selecting a nested settings.gradle from an unrelated folder.
+          locate_project() {
+            python3 - "$1" <<'PYPROJECT'
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1]).resolve()
+          for settings in sorted(root.rglob("settings.gradle.kts")):
+              if ".git" in settings.parts:
+                  continue
+              project = settings.parent
+              app_gradle = project / "app/build.gradle.kts"
+              activity = project / "app/src/main/java/com/flameclient/android/MainActivity.kt"
+              if not app_gradle.is_file() or not activity.is_file():
+                  continue
+              gradle_text = app_gradle.read_text(encoding="utf-8")
+              if 'versionName = "2.3"' in gradle_text and "versionCode = 9" in gradle_text:
+                  print(project)
+                  raise SystemExit(0)
+          raise SystemExit(1)
+          PYPROJECT
+          }
 
-          echo "ZIP: $PROJECT_ZIP"
+          FULL_ZIP="$(find_file 'FLAME_CLIENT_v2.3_FLAME_REWORK.zip' || true)"
+          PART1="$(find_file 'FLAME_CLIENT_v2.3_PART1_PROJECT.zip' || true)"
+          PART2="$(find_file 'FLAME_CLIENT_v2.3_PART2_LARGE_PACKS.zip' || true)"
+          SOURCE_DIR=""
 
-          mkdir -p "$RUNNER_TEMP/flame_project"
-          unzip -oq "$PROJECT_ZIP" \
-            -d "$RUNNER_TEMP/flame_project"
-
-          echo "PROJECT_DIR=$RUNNER_TEMP/flame_project" \
-            >> "$GITHUB_ENV"
-
-          echo "=== Cấu trúc file sau giải nén ==="
-          find "$RUNNER_TEMP/flame_project" \
-            -maxdepth 5 -type f | sort | head -n 300
-
-      # GIỮ NGUYÊN BƯỚC CÀI ĐẶT ANDROID SDK HIỆN TẠI
-      # Nếu workflow cũ có bước cài SDK thật,
-      # hãy giữ nguyên toàn bộ bước đó tại vị trí này.
-
-      - name: Locate Gradle Project
-        shell: bash
-        run: |
-          set -e
-
-          ROOT="$RUNNER_TEMP/flame_project"
-
-          echo "=== Tìm thư mục dự án Gradle ==="
-
-          SETTINGS="$(find "$ROOT" -type f \
-            \( -name 'settings.gradle' \
-            -o -name 'settings.gradle.kts' \) \
-            -print -quit)"
-
-          if [ -n "$SETTINGS" ]; then
-            PROJECT_DIR="$(dirname "$SETTINGS")"
-          else
-            BUILD_FILE="$(find "$ROOT" -type f \
-              \( -name 'build.gradle' \
-              -o -name 'build.gradle.kts' \) \
-              -print -quit)"
-
-            if [ -n "$BUILD_FILE" ]; then
-              PROJECT_DIR="$(dirname "$BUILD_FILE")"
-            else
-              echo "::error::ZIP không có settings.gradle hoặc build.gradle."
-              echo "=== File trong ZIP ==="
-              find "$ROOT" -maxdepth 6 -type f | sort | head -n 500
+          if [ -n "$FULL_ZIP" ]; then
+            echo "Using full v2.3 source archive: $FULL_ZIP"
+            mkdir -p "$STAGE/full"
+            unzip -oq "$FULL_ZIP" -d "$STAGE/full"
+            SOURCE_DIR="$(locate_project "$STAGE/full" || true)"
+            if [ -z "$SOURCE_DIR" ]; then
+              echo 'ERROR: Full ZIP does not contain a complete v2.3 Gradle project.'
               exit 1
             fi
+            mkdir -p "$STAGE/source"
+            cp -a "$SOURCE_DIR"/. "$STAGE/source"/
+          elif [ -n "$PART1" ] && [ -n "$PART2" ]; then
+            echo 'Using both v2.3 split archives.'
+            mkdir -p "$STAGE/part1" "$STAGE/part2" "$STAGE/source"
+            unzip -oq "$PART1" -d "$STAGE/part1"
+            unzip -oq "$PART2" -d "$STAGE/part2"
+            SOURCE_DIR="$(locate_project "$STAGE/part1" || true)"
+            PACK_DIR="$(find "$STAGE/part2" -type d -path '*/app/src/main/assets/packs' -print -quit || true)"
+            if [ -z "$SOURCE_DIR" ] || [ -z "$PACK_DIR" ]; then
+              echo 'ERROR: Could not locate the v2.3 project or additional packs in the split ZIPs.'
+              find "$STAGE/part1" -maxdepth 5 -type f -print | head -80 || true
+              find "$STAGE/part2" -maxdepth 7 -type f -print | head -80 || true
+              exit 1
+            fi
+            cp -a "$SOURCE_DIR"/. "$STAGE/source"/
+            mkdir -p "$STAGE/source/app/src/main/assets/packs"
+            cp -a "$PACK_DIR"/. "$STAGE/source/app/src/main/assets/packs"/
+          else
+            # Also support a repository containing the source directly, including a subfolder.
+            SOURCE_DIR="$(locate_project "$WS" || true)"
+            if [ -z "$SOURCE_DIR" ]; then
+              echo 'ERROR: Could not find the v2.3 Gradle project.'
+              echo 'Upload FLAME_CLIENT_v2.3_FLAME_REWORK.zip, or both PART1_PROJECT and PART2_LARGE_PACKS ZIPs.'
+              echo 'The project must contain settings.gradle.kts, app/build.gradle.kts, and MainActivity.kt.'
+              ls -la "$WS"
+              exit 1
+            fi
+            if [ "$SOURCE_DIR" = "$WS" ]; then
+              echo 'Using the verified v2.3 project at the repository root.'
+              python3 scripts/verify_source.py
+              exit 0
+            fi
+            mkdir -p "$STAGE/source"
+            cp -a "$SOURCE_DIR"/. "$STAGE/source"/
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          # Copy only after a valid source root has been identified; keep the active workflow and SDK setup.
+          test -f "$STAGE/source/settings.gradle.kts"
+          test -f "$STAGE/source/app/build.gradle.kts"
+          test -f "$STAGE/source/app/src/main/java/com/flameclient/android/MainActivity.kt"
+          grep -q 'versionName = "2.3"' "$STAGE/source/app/build.gradle.kts"
+          grep -q 'versionCode = 9' "$STAGE/source/app/build.gradle.kts"
 
-          echo "Thư mục dự án: $PROJECT_DIR"
-          echo "=== Các file Gradle ==="
-          find "$PROJECT_DIR" -maxdepth 4 -type f \
-            \( -name 'gradlew' \
-            -o -name 'settings.gradle' \
-            -o -name 'settings.gradle.kts' \
-            -o -name 'build.gradle' \
-            -o -name 'build.gradle.kts' \
-            -o -name 'gradle-wrapper.properties' \) -print
+          rm -rf "$WS/app" "$WS/gradle" "$WS/build" "$WS/.gradle" "$WS/scripts"
+          rm -f "$WS/settings.gradle.kts" "$WS/settings.gradle" "$WS/build.gradle.kts" \
+            "$WS/build.gradle" "$WS/gradle.properties" "$WS/gradlew" "$WS/gradlew.bat"
+          cp -a "$STAGE/source"/. "$WS"/
+
+          python3 scripts/verify_source.py
+          grep -q 'versionName = "2.3"' app/build.gradle.kts
+          grep -q 'versionCode = 9' app/build.gradle.kts
+          echo 'Verified source version: FLAME CLIENT v2.3.'
 
       - name: Build debug APK
         shell: bash
         run: |
-          set -e
-          cd "$PROJECT_DIR"
+          set -euo pipefail
+          java -version
+          gradle --version
+          gradle --no-daemon --stacktrace :app:assembleDebug
 
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon assembleDebug
-          elif [ -f "settings.gradle" ] \
-            || [ -f "settings.gradle.kts" ]; then
-            echo "::error::Có cấu hình Gradle nhưng thiếu gradlew."
-            echo "Cần bổ sung Gradle Wrapper hoặc cài Gradle phù hợp."
-            exit 1
-          else
-            echo "::error::Không tìm thấy cấu hình dự án Gradle."
+      - name: Verify and rename APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -s "$APK_PATH" ]; then
+            echo 'ERROR: Expected APK was not produced.'
+            find app/build/outputs -maxdepth 5 -type f -print 2>/dev/null || true
             exit 1
           fi
+          mkdir -p artifact
+          cp "$APK_PATH" artifact/FLAME_CLIENT-v2.3-debug.apk
+          test -s artifact/FLAME_CLIENT-v2.3-debug.apk
+          sha256sum artifact/FLAME_CLIENT-v2.3-debug.apk
+          echo 'Artifact ready: FLAME_CLIENT-v2.3-debug.apk'
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME-CLIENT-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: FLAME_CLIENT-v2.3-debug-apk
+          path: artifact/FLAME_CLIENT-v2.3-debug.apk
           if-no-files-found: error
+          retention-days: 14
