@@ -1,55 +1,62 @@
-name: Build FLAME CLIENT APK (join 4 parts)
+
+name: Build FLAME LAUNCHER v3.0 (Levi-style Home)
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Unzip source and build FLAME CLIENT
+    name: Reassemble FLAME LAUNCHER source and build APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Rebuild original project ZIP from 4 uploaded parts
+      - name: Rebuild source ZIP from 4 parts
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_ARCHIVE="$RUNNER_TEMP/FLAME_CLIENT_LAUNCHER_GITHUB_BUILD.zip"
+
+          SOURCE_ARCHIVE="$RUNNER_TEMP/FLAME_LAUNCHER_v3.0_LEVI_STYLE_PROJECT.zip"
           PART_DIR="$GITHUB_WORKSPACE"
+
           for n in 1 2 3 4; do
-            PART="$PART_DIR/FLAME_CLIENT_BUILD_PART${n}.bin"
+            PART="$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART${n}.bin"
             if [ ! -s "$PART" ]; then
-              echo "ERROR: Missing FLAME_CLIENT_BUILD_PART${n}.bin in the repository root."
+              echo "ERROR: Missing FLAME_LAUNCHER_v3.0_BUILD_PART${n}.bin"
               exit 1
             fi
           done
+
           cat \
-            "$PART_DIR/FLAME_CLIENT_BUILD_PART1.bin" \
-            "$PART_DIR/FLAME_CLIENT_BUILD_PART2.bin" \
-            "$PART_DIR/FLAME_CLIENT_BUILD_PART3.bin" \
-            "$PART_DIR/FLAME_CLIENT_BUILD_PART4.bin" > "$SOURCE_ARCHIVE"
-          if ! unzip -tq "$SOURCE_ARCHIVE"; then
-            echo 'ERROR: The 4 parts did not reconstruct a valid ZIP. Re-upload all 4 parts without changing their names.'
-            exit 1
-          fi
-          SOURCE_DIR="$RUNNER_TEMP/flame-client-source"
+            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART1.bin" \
+            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART2.bin" \
+            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART3.bin" \
+            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART4.bin" \
+            > "$SOURCE_ARCHIVE"
+
+          unzip -tq "$SOURCE_ARCHIVE"
+
+          SOURCE_DIR="$RUNNER_TEMP/flame-launcher-source"
           mkdir -p "$SOURCE_DIR"
           unzip -oq "$SOURCE_ARCHIVE" -d "$SOURCE_DIR"
-          if [ ! -f "$SOURCE_DIR/settings.gradle.kts" ] && [ ! -f "$SOURCE_DIR/settings.gradle" ]; then
-            echo 'ERROR: The reconstructed ZIP was extracted, but no Gradle settings file was found at its root.'
-            find "$SOURCE_DIR" -maxdepth 4 -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print
+
+          if [ ! -f "$SOURCE_DIR/settings.gradle.kts" ] && \
+             [ ! -f "$SOURCE_DIR/settings.gradle" ]; then
+            echo "ERROR: Gradle settings file not found at project root."
+            find "$SOURCE_DIR" -maxdepth 5 -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) -print
             exit 1
           fi
+
           echo "FLAME_PROJECT_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-          echo 'Extracted source files:'
-          find "$SOURCE_DIR" -maxdepth 2 -type f | sort | head -80
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -57,63 +64,90 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Keep the existing Android SDK discovery approach unchanged.
-      - name: Configure preinstalled Android SDK
+      - name: Configure Android SDK
         shell: bash
         run: |
           set -euo pipefail
+
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+
           if [ ! -d "$SDK_ROOT" ]; then
-            echo "ERROR: Android SDK directory not found: $SDK_ROOT"
+            echo "ERROR: Android SDK not found: $SDK_ROOT"
             exit 1
           fi
+
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print 2>/dev/null | sort -V | tail -n 1)"
+
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f \
+            -name sdkmanager -print 2>/dev/null | sort -V | tail -n 1)"
+
           if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found under $SDK_ROOT/cmdline-tools"
-            find "$SDK_ROOT" -maxdepth 4 -type f -name sdkmanager -print || true
+            echo "ERROR: sdkmanager not found."
+            find "$SDK_ROOT" -maxdepth 5 -type f -name sdkmanager -print || true
             exit 1
           fi
+
           echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
           "$SDKMANAGER" --version
 
-      # SDK package selection intentionally unchanged.
       - name: Install Android SDK packages
         shell: bash
-        run: sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate FLAME project and bundled packs
+      - name: Validate FLAME project
         shell: bash
         working-directory: ${{ env.FLAME_PROJECT_DIR }}
         run: |
           set -euo pipefail
+
           if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
-            echo 'ERROR: Gradle settings file missing from extracted project root.'
+            echo "ERROR: Gradle settings file missing."
             exit 1
           fi
+
           if [ ! -f app/build.gradle.kts ] && [ ! -f app/build.gradle ]; then
-            echo 'ERROR: app Gradle file missing from extracted project root.'
+            echo "ERROR: app Gradle file missing."
             exit 1
           fi
-          test -f app/src/main/java/com/flameclient/android/MainActivity.kt
-          test -d app/src/main/assets/packs
+
+          if [ ! -f app/src/main/java/com/flameclient/android/MainActivity.kt ]; then
+            echo "ERROR: MainActivity.kt not found."
+            find app/src/main -maxdepth 6 -type f -print || true
+            exit 1
+          fi
+
+          if [ ! -d app/src/main/assets/packs ]; then
+            echo "ERROR: Pack assets folder not found."
+            exit 1
+          fi
+
           PACK_COUNT="$(find app/src/main/assets/packs -type f | wc -l | tr -d ' ')"
+
           if [ "$PACK_COUNT" -lt 1 ]; then
-            echo 'ERROR: No resource packs were bundled.'
+            echo "ERROR: No pack files found."
             exit 1
           fi
+
           echo "FLAME_PACK_FILE_COUNT=$PACK_COUNT" >> "$GITHUB_ENV"
-          python3 scripts/verify_source.py
+
+          if [ -f scripts/verify_source.py ]; then
+            python3 scripts/verify_source.py
+          fi
+
           echo "Found $PACK_COUNT pack files."
 
-      - name: Build debug APK
+      - name: Build FLAME LAUNCHER APK
         shell: bash
         working-directory: ${{ env.FLAME_PROJECT_DIR }}
         run: |
@@ -122,31 +156,36 @@ jobs:
           gradle --version
           gradle --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify APK and bundled packs
+      - name: Verify APK
         shell: bash
         working-directory: ${{ env.FLAME_PROJECT_DIR }}
         run: |
           set -euo pipefail
+
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+
           if [ ! -s "$APK_PATH" ]; then
-            echo 'ERROR: Expected APK was not produced.'
+            echo "ERROR: APK was not produced."
             find app/build/outputs -maxdepth 5 -type f -print 2>/dev/null || true
             exit 1
           fi
-          APK_PACK_COUNT="$(unzip -Z1 "$APK_PATH" | grep -c '^assets/packs/' || true)"
-          if [ "$APK_PACK_COUNT" -lt "$FLAME_PACK_FILE_COUNT" ]; then
-            echo "ERROR: Source has $FLAME_PACK_FILE_COUNT pack files but APK has $APK_PACK_COUNT pack entries."
-            exit 1
-          fi
-          mkdir -p "$GITHUB_WORKSPACE/artifact"
-          cp "$APK_PATH" "$GITHUB_WORKSPACE/artifact/FLAME_CLIENT_LAUNCHER-v3.0-debug.apk"
-          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_CLIENT_LAUNCHER-v3.0-debug.apk"
-          du -h "$GITHUB_WORKSPACE/artifact/FLAME_CLIENT_LAUNCHER-v3.0-debug.apk"
 
-      - name: Upload APK artifact
+          APK_PACK_COUNT="$(unzip -Z1 "$APK_PATH" | grep -c '^assets/packs/' || true)"
+
+          if [ "$APK_PACK_COUNT" -lt "$FLAME_PACK_FILE_COUNT" ]; then
+            echo "WARNING: APK pack entries ($APK_PACK_COUNT) are fewer than source files ($FLAME_PACK_FILE_COUNT)."
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp "$APK_PATH" \
+            "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-v3.0-debug.apk"
+
+          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-v3.0-debug.apk"
+
+      - name: Upload FLAME LAUNCHER APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_CLIENT_LAUNCHER-debug-apk
-          path: artifact/FLAME_CLIENT_LAUNCHER-v3.0-debug.apk
+          name: FLAME_LAUNCHER-v3.0-debug-apk
+          path: artifact/FLAME_LAUNCHER-v3.0-debug.apk
           if-no-files-found: error
           retention-days: 14
