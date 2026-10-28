@@ -1,5 +1,5 @@
 
-name: Build FLAME LAUNCHER v3.0 (Levi-style Home)
+name: Build FLAME CLIENT Simple Launcher APK
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Reassemble FLAME LAUNCHER source and build APK
+    name: Build FLAME Launcher APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -19,60 +19,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Rebuild source ZIP from 4 parts
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SOURCE_ARCHIVE="$RUNNER_TEMP/FLAME_LAUNCHER_v3.0_LEVI_STYLE_PROJECT.zip"
-          PART_DIR="$GITHUB_WORKSPACE"
-
-          for n in 1 2 3 4; do
-            PART="$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART${n}.bin"
-            if [ ! -s "$PART" ]; then
-              echo "ERROR: Missing FLAME_LAUNCHER_v3.0_BUILD_PART${n}.bin"
-              exit 1
-            fi
-          done
-
-          cat \
-            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART1.bin" \
-            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART2.bin" \
-            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART3.bin" \
-            "$PART_DIR/FLAME_LAUNCHER_v3.0_BUILD_PART4.bin" \
-            > "$SOURCE_ARCHIVE"
-
-          unzip -tq "$SOURCE_ARCHIVE"
-
-          SOURCE_DIR="$RUNNER_TEMP/flame-launcher-source"
-          mkdir -p "$SOURCE_DIR"
-          unzip -oq "$SOURCE_ARCHIVE" -d "$SOURCE_DIR"
-
-          if [ ! -f "$SOURCE_DIR/settings.gradle.kts" ] && \
-             [ ! -f "$SOURCE_DIR/settings.gradle" ]; then
-            echo "ERROR: Gradle settings file not found at project root."
-            find "$SOURCE_DIR" -maxdepth 5 -type f \
-              \( -name settings.gradle -o -name settings.gradle.kts \) -print
-            exit 1
-          fi
-
-          echo "FLAME_PROJECT_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      # Giữ phần phát hiện Android SDK
       - name: Configure Android SDK
         shell: bash
         run: |
           set -euo pipefail
-
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 
           if [ ! -d "$SDK_ROOT" ]; then
-            echo "ERROR: Android SDK not found: $SDK_ROOT"
+            echo "ERROR: Không tìm thấy Android SDK: $SDK_ROOT"
             exit 1
           fi
 
@@ -80,12 +41,10 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f \
-            -name sdkmanager -print 2>/dev/null | sort -V | tail -n 1)"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print 2>/dev/null | sort -V | tail -n 1)"
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found."
-            find "$SDK_ROOT" -maxdepth 5 -type f -name sdkmanager -print || true
+            echo "ERROR: Không tìm thấy sdkmanager"
             exit 1
           fi
 
@@ -95,6 +54,7 @@ jobs:
       - name: Install Android SDK packages
         shell: bash
         run: |
+          set -euo pipefail
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
@@ -105,87 +65,152 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate FLAME project
+      - name: Locate and extract FLAME source
+        id: source
         shell: bash
-        working-directory: ${{ env.FLAME_PROJECT_DIR }}
         run: |
           set -euo pipefail
 
-          if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
-            echo "ERROR: Gradle settings file missing."
+          WS="$GITHUB_WORKSPACE"
+          STAGE="$RUNNER_TEMP/flame-source"
+          SOURCE_ROOT=""
+
+          # Ưu tiên dự án Android đã được giải nén sẵn
+          if [ -s "$WS/settings.gradle.kts" ] && [ -s "$WS/app/build.gradle.kts" ]; then
+            SOURCE_ROOT="$WS"
+          else
+            PART1="$WS/FLAME_CLIENT_BUILD_PART1.bin"
+            PART2="$WS/FLAME_CLIENT_BUILD_PART2.bin"
+            PART3="$WS/FLAME_CLIENT_BUILD_PART3.bin"
+            PART4="$WS/FLAME_CLIENT_BUILD_PART4.bin"
+            FULL_ZIP="$WS/FLAME_LAUNCHER_SIMPLE_FULL_SOURCE.zip"
+            REBUILT="$RUNNER_TEMP/flame-source.zip"
+
+            if [ -s "$PART1" ] || [ -s "$PART2" ] || [ -s "$PART3" ] || [ -s "$PART4" ]; then
+              for f in "$PART1" "$PART2" "$PART3" "$PART4"; do
+                if [ ! -s "$f" ]; then
+                  echo "ERROR: Thiếu file $(basename "$f")"
+                  exit 1
+                fi
+              done
+
+              cat "$PART1" "$PART2" "$PART3" "$PART4" > "$REBUILT"
+
+              if ! unzip -tq "$REBUILT"; then
+                echo "ERROR: Ghép 4 phần không tạo được ZIP hợp lệ."
+                echo "Hãy dùng đủ 4 phần thuộc cùng một bộ."
+                exit 1
+              fi
+
+              rm -rf "$STAGE"
+              mkdir -p "$STAGE"
+              unzip -oq "$REBUILT" -d "$STAGE"
+
+            elif [ -s "$FULL_ZIP" ]; then
+              if ! unzip -tq "$FULL_ZIP"; then
+                echo "ERROR: ZIP mã nguồn bị lỗi."
+                exit 1
+              fi
+
+              rm -rf "$STAGE"
+              mkdir -p "$STAGE"
+              unzip -oq "$FULL_ZIP" -d "$STAGE"
+
+            else
+              echo "ERROR: Không tìm thấy mã nguồn FLAME."
+              echo "Cần đủ 4 file PART1 đến PART4 ở thư mục gốc."
+              find "$WS" -maxdepth 2 -type f -printf '%P\n' | sort
+              exit 1
+            fi
+
+            SETTINGS="$(find "$STAGE" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/.gradle/*' -print -quit)"
+
+            if [ -z "$SETTINGS" ]; then
+              echo "ERROR: Không tìm thấy settings.gradle hoặc settings.gradle.kts"
+              exit 1
+            fi
+
+            SOURCE_ROOT="$(dirname "$SETTINGS")"
+          fi
+
+          if [ ! -s "$SOURCE_ROOT/app/build.gradle.kts" ] && [ ! -s "$SOURCE_ROOT/app/build.gradle" ]; then
+            echo "ERROR: Không tìm thấy app/build.gradle(.kts)"
             exit 1
           fi
 
-          if [ ! -f app/build.gradle.kts ] && [ ! -f app/build.gradle ]; then
-            echo "ERROR: app Gradle file missing."
+          if [ ! -s "$SOURCE_ROOT/app/src/main/AndroidManifest.xml" ]; then
+            echo "ERROR: Thiếu AndroidManifest.xml"
             exit 1
           fi
 
-          if [ ! -f app/src/main/java/com/flameclient/android/MainActivity.kt ]; then
-            echo "ERROR: MainActivity.kt not found."
-            find app/src/main -maxdepth 6 -type f -print || true
+          echo "FLAME_PROJECT_DIR=$SOURCE_ROOT" >> "$GITHUB_ENV"
+          echo "Đã xác định thư mục dự án: $SOURCE_ROOT"
+          find "$SOURCE_ROOT" -maxdepth 3 -type f -printf '%P\n' | sort | head -100
+
+      - name: Validate project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$FLAME_PROJECT_DIR"
+
+          test -s app/src/main/AndroidManifest.xml
+
+          if [ ! -s app/src/main/java/com/flameclient/android/MainActivity.kt ]; then
+            echo "ERROR: Không tìm thấy MainActivity.kt theo đường dẫn dự kiến."
+            find app/src/main -type f -printf '%P\n' | sort | head -150
             exit 1
           fi
-
-          if [ ! -d app/src/main/assets/packs ]; then
-            echo "ERROR: Pack assets folder not found."
-            exit 1
-          fi
-
-          PACK_COUNT="$(find app/src/main/assets/packs -type f | wc -l | tr -d ' ')"
-
-          if [ "$PACK_COUNT" -lt 1 ]; then
-            echo "ERROR: No pack files found."
-            exit 1
-          fi
-
-          echo "FLAME_PACK_FILE_COUNT=$PACK_COUNT" >> "$GITHUB_ENV"
 
           if [ -f scripts/verify_source.py ]; then
             python3 scripts/verify_source.py
           fi
 
-          echo "Found $PACK_COUNT pack files."
+          echo "Kiểm tra file dự án cơ bản hoàn tất."
 
-      - name: Build FLAME LAUNCHER APK
+      - name: Build Android APK
         shell: bash
-        working-directory: ${{ env.FLAME_PROJECT_DIR }}
         run: |
           set -euo pipefail
+          cd "$FLAME_PROJECT_DIR"
+
           java -version
           gradle --version
           gradle --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify APK
+      - name: Verify and prepare APK
         shell: bash
-        working-directory: ${{ env.FLAME_PROJECT_DIR }}
         run: |
           set -euo pipefail
+          cd "$FLAME_PROJECT_DIR"
 
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -s "$APK_PATH" ]; then
-            echo "ERROR: APK was not produced."
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: Gradle không tạo được APK tại $APK"
             find app/build/outputs -maxdepth 5 -type f -print 2>/dev/null || true
             exit 1
           fi
 
-          APK_PACK_COUNT="$(unzip -Z1 "$APK_PATH" | grep -c '^assets/packs/' || true)"
-
-          if [ "$APK_PACK_COUNT" -lt "$FLAME_PACK_FILE_COUNT" ]; then
-            echo "WARNING: APK pack entries ($APK_PACK_COUNT) are fewer than source files ($FLAME_PACK_FILE_COUNT)."
-          fi
-
           mkdir -p "$GITHUB_WORKSPACE/artifact"
-          cp "$APK_PATH" \
-            "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-v3.0-debug.apk"
+          cp "$APK" "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-debug.apk"
 
-          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-v3.0-debug.apk"
+          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-debug.apk" \
+            > "$GITHUB_WORKSPACE/artifact/SHA256.txt"
 
-      - name: Upload FLAME LAUNCHER APK
+          {
+            echo "FLAME LAUNCHER - Build report"
+            echo "APK: FLAME_LAUNCHER-debug.apk"
+            echo "Build: Gradle assembleDebug"
+            echo "SHA256:"
+            sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER-debug.apk"
+          } > "$GITHUB_WORKSPACE/artifact/BUILD_REPORT.txt"
+
+          ls -lh "$GITHUB_WORKSPACE/artifact"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME_LAUNCHER-v3.0-debug-apk
-          path: artifact/FLAME_LAUNCHER-v3.0-debug.apk
+          name: FLAME-LAUNCHER-APK
+          path: artifact/*
           if-no-files-found: error
           retention-days: 14
