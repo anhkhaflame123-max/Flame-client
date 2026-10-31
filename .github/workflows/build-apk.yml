@@ -11,6 +11,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,40 +25,61 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
+      - name: Install Android Command Line Tools
         run: |
-          sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools"
-          sdkmanager --sdk_root="$ANDROID_HOME" "platforms;android-35"
-          sdkmanager --sdk_root="$ANDROID_HOME" "build-tools;35.0.0"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          cd "$RUNNER_TEMP"
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
+          unzip -q tools.zip
+
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          mv cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK
+        run: |
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses || true
+
+          sdkmanager --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Verify Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          sdkmanager --version
+          ls "$ANDROID_HOME"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Locate Gradle project
+      - name: Find FLAME Launcher project
         run: |
-          echo "Checking project files..."
-          ls -la
+          echo "Searching for Gradle project..."
           find . -name "settings.gradle" -o -name "settings.gradle.kts"
 
-      - name: Build FLAME Launcher
+      - name: Build APK
         run: |
           if [ -f "gradlew" ]; then
             chmod +x gradlew
-            ./gradlew --no-daemon assembleDebug
+            ./gradlew assembleDebug
+          elif [ -f "FLAME_LAUNCHER/gradlew" ]; then
+            cd FLAME_LAUNCHER
+            chmod +x gradlew
+            ./gradlew assembleDebug
           else
-            gradle --no-daemon assembleDebug
+            echo "ERROR: gradlew not found!"
+            echo "Please check the FLAME Launcher project ZIP."
+            exit 1
           fi
 
-      - name: Upload FLAME Launcher APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-Launcher-APK
-          path: |
-            **/build/outputs/apk/debug/*.apk
+          path: "**/build/outputs/apk/debug/*.apk"
           if-no-files-found: error
