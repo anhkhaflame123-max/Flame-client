@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
 
     env:
@@ -21,25 +21,28 @@ jobs:
       ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
 
     steps:
-      - name: Checkout repository
+      - name: Checkout FLAME repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Install Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Download Android Command Line Tools
+        shell: bash
         run: |
+          set -e
+
           mkdir -p "$ANDROID_HOME/cmdline-tools"
           cd "$RUNNER_TEMP"
 
           wget -q \
-            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
-            -O commandlinetools.zip
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -O android-tools.zip
 
-          unzip -q commandlinetools.zip
+          unzip -q android-tools.zip
 
           mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
 
@@ -48,89 +51,136 @@ jobs:
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Verify sdkmanager
+      - name: Verify Android SDK Manager
         run: |
-          ls -la "$ANDROID_HOME/cmdline-tools/latest/bin"
+          set -e
+
+          test -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
           sdkmanager --version
 
       - name: Accept Android SDK licenses
+        shell: bash
         run: |
-          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses || true
+          set +o pipefail
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses
 
-      - name: Install Android SDK packages
+      - name: Install Android SDK 35
         run: |
           sdkmanager --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Setup Gradle
+      - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Locate FLAME Launcher project
+      - name: Locate FLAME project source
+        shell: bash
         run: |
-          echo "Searching for Gradle project..."
+          set -e
 
-          find . -type f \
-            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            -not -path "*/.gradle/*" \
-            -not -path "*/build/*"
+          ROOT="$GITHUB_WORKSPACE"
+          STAGE="$RUNNER_TEMP/flame-source"
+          ZIPFILE="$RUNNER_TEMP/flame-source.zip"
+
+          if [ -f "$ROOT/settings.gradle.kts" ] || \
+             [ -f "$ROOT/settings.gradle" ]; then
+
+            PROJECT="$ROOT"
+
+          elif [ -f "$ROOT/FLAME_LAUNCHER_SIMPLE_FULL_SOURCE.zip" ]; then
+
+            unzip -tq "$ROOT/FLAME_LAUNCHER_SIMPLE_FULL_SOURCE.zip"
+
+            mkdir -p "$STAGE"
+
+            unzip -oq "$ROOT/FLAME_LAUNCHER_SIMPLE_FULL_SOURCE.zip" -d "$STAGE"
+
+            PROJECT=$(find "$STAGE" -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path "*/.gradle/*" \
+              -print -quit | xargs -r dirname)
+
+          else
+
+            PART1="$ROOT/FLAME_CLIENT_BUILD_PART1.bin"
+            PART2="$ROOT/FLAME_CLIENT_BUILD_PART2.bin"
+            PART3="$ROOT/FLAME_CLIENT_BUILD_PART3.bin"
+            PART4="$ROOT/FLAME_CLIENT_BUILD_PART4.bin"
+
+            for FILE in "$PART1" "$PART2" "$PART3" "$PART4"; do
+              if [ ! -s "$FILE" ]; then
+                echo "ERROR: Missing source part: $(basename "$FILE")"
+                echo "Please upload all four matching source parts."
+                exit 1
+              fi
+            done
+
+            cat "$PART1" "$PART2" "$PART3" "$PART4" > "$ZIPFILE"
+
+            unzip -tq "$ZIPFILE"
+
+            mkdir -p "$STAGE"
+
+            unzip -oq "$ZIPFILE" -d "$STAGE"
+
+            PROJECT=$(find "$STAGE" -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path "*/.gradle/*" \
+              -print -quit | xargs -r dirname)
+
+          fi
+
+          if [ -z "${PROJECT:-}" ] || [ ! -d "$PROJECT" ]; then
+            echo "ERROR: Could not locate the Gradle project."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT/app/build.gradle" ] && \
+             [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle not found."
+            exit 1
+          fi
+
+          echo "FLAME_PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+
+          echo "Project located: $PROJECT"
 
       - name: Build FLAME Launcher
         shell: bash
         run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon assembleDebug
+          set -e
 
-          elif [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
-            gradle --no-daemon assembleDebug
+          cd "$FLAME_PROJECT_DIR"
 
-          else
-            PROJECT_DIR=$(find . -type f \
-              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-              -not -path "*/.gradle/*" \
-              -not -path "*/build/*" \
-              -print -quit | xargs -r dirname)
+          gradle --no-daemon --stacktrace :app:assembleDebug
 
-            if [ -z "$PROJECT_DIR" ]; then
-              echo "ERROR: Gradle project not found!"
-              exit 1
-            fi
-
-            cd "$PROJECT_DIR"
-
-            if [ -f "gradlew" ]; then
-              chmod +x gradlew
-              ./gradlew --no-daemon assembleDebug
-            else
-              gradle --no-daemon assembleDebug
-            fi
-          fi
-
-      - name: Find generated APK
+      - name: Verify generated APK
+        shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/flame-apk"
+          set -e
 
-          APK_PATH=$(find . -type f \
-            -path "*/build/outputs/apk/debug/*.apk" \
-            -print -quit)
+          APK="$FLAME_PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ -z "$APK_PATH" ]; then
-            echo "ERROR: APK not found after build!"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            find "$FLAME_PROJECT_DIR" -type f -name "*.apk"
             exit 1
           fi
 
-          cp "$APK_PATH" "$RUNNER_TEMP/flame-apk/FLAME_LAUNCHER.apk"
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
 
-          ls -lh "$RUNNER_TEMP/flame-apk/FLAME_LAUNCHER.apk"
+          cp "$APK" "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER.apk"
+
+          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER.apk"
 
       - name: Upload FLAME Launcher APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-LAUNCHER-APK
-          path: ${{ runner.temp }}/flame-apk/FLAME_LAUNCHER.apk
+          path: artifact/FLAME_LAUNCHER.apk
           if-no-files-found: error
           retention-days: 14
