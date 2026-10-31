@@ -30,34 +30,36 @@ jobs:
           set -e
 
           SDK="$ANDROID_SDK_ROOT"
-          TOOLS="$SDK/cmdline-tools/latest"
+          CMD="$SDK/cmdline-tools"
+          LATEST="$CMD/latest"
 
-          mkdir -p "$SDK/cmdline-tools"
-          rm -rf "$TOOLS"
-          mkdir -p "$TOOLS"
+          mkdir -p "$CMD"
+          rm -rf "$LATEST"
+          rm -rf "$CMD/cmdline-tools"
 
           wget -q \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -O commandlinetools.zip
 
-          unzip -oq commandlinetools.zip \
-            -d "$TOOLS"
+          echo "Extracting Android Command-line Tools..."
+          unzip -oq commandlinetools.zip -d "$CMD"
 
-          SDKMANAGER="$TOOLS/cmdline-tools/bin/sdkmanager"
+          echo "Fixing SDK directory structure..."
+          mv "$CMD/cmdline-tools" "$LATEST"
 
-          chmod +x "$SDKMANAGER"
+          SDKMANAGER="$LATEST/bin/sdkmanager"
 
           echo "Checking SDK Manager..."
-          "$SDKMANAGER" --version
+          "$SDKMANAGER" --sdk_root="$SDK" --version
 
           echo "Installing Android SDK packages..."
-
           "$SDKMANAGER" \
             --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+          echo "Accepting Android SDK licenses..."
           yes | "$SDKMANAGER" \
             --sdk_root="$SDK" --licenses || true
 
@@ -66,7 +68,8 @@ jobs:
           set -e
 
           wget -q \
-            https://services.gradle.org/distributions/gradle-8.9-bin.zip
+            https://services.gradle.org/distributions/gradle-8.9-bin.zip \
+            -O gradle-8.9-bin.zip
 
           unzip -q gradle-8.9-bin.zip
 
@@ -87,10 +90,10 @@ jobs:
             FLAME_CLIENT_BUILD_PART4.bin \
             > reconstructed/FLAME_SOURCE.zip
 
-          echo "Checking ZIP integrity..."
+          echo "Checking source ZIP..."
           unzip -t reconstructed/FLAME_SOURCE.zip
 
-          echo "Extracting source..."
+          echo "Extracting FLAME source..."
           unzip -oq reconstructed/FLAME_SOURCE.zip \
             -d reconstructed/source
 
