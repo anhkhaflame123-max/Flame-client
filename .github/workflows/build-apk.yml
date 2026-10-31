@@ -30,7 +30,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Download Android Command Line Tools
+      - name: Install Android Command Line Tools
         shell: bash
         run: |
           set -e
@@ -50,7 +50,7 @@ jobs:
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-      - name: Install Android SDK
+      - name: Install Android SDK packages
         shell: bash
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -67,52 +67,63 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Find FLAME Launcher ZIP
+      - name: Find valid FLAME Android project ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP=$(find "$GITHUB_WORKSPACE" \
-            -maxdepth 3 \
-            -type f \
-            -iname "*.zip" \
-            ! -name "commandlinetools.zip" \
-            -print | while read FILE; do
-              if unzip -Z1 "$FILE" 2>/dev/null | grep -qE '(^|/)settings\.gradle(\.kts)?$'; then
-                echo "$FILE"
-                break
-              fi
-            done)
+          FOUND=""
 
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: No ZIP containing a Gradle project was found."
-            echo "ZIP files in repository:"
+          while IFS= read -r ZIP; do
+            echo "Checking: $ZIP"
+
+            if ! unzip -tq "$ZIP" >/dev/null 2>&1; then
+              echo "Invalid ZIP, skipping."
+              continue
+            fi
+
+            if unzip -Z1 "$ZIP" 2>/dev/null |
+               grep -qE '(^|/)settings\.gradle(\.kts)?$'; then
+              FOUND="$ZIP"
+              break
+            fi
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -iname "*.zip" \
+              ! -path "*/.git/*"
+          )
+
+          if [ -z "$FOUND" ]; then
+            echo "ERROR: No complete Android Gradle project ZIP found."
+            echo "ZIP files available:"
             find "$GITHUB_WORKSPACE" -type f -iname "*.zip"
             exit 1
           fi
 
-          echo "Found project ZIP: $ZIP"
-          echo "FLAME_SOURCE_ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "Selected project: $FOUND"
+          echo "FLAME_SOURCE_ZIP=$FOUND" >> "$GITHUB_ENV"
 
-      - name: Extract FLAME Launcher source
+      - name: Extract FLAME project
         shell: bash
         run: |
           set -e
 
-          mkdir -p "$RUNNER_TEMP/flame-project"
+          DEST="$RUNNER_TEMP/flame-source"
 
-          unzip -oq "$FLAME_SOURCE_ZIP" \
-            -d "$RUNNER_TEMP/flame-project"
+          mkdir -p "$DEST"
 
-          echo "Extracted source:"
-          find "$RUNNER_TEMP/flame-project" -maxdepth 4 -type f | head -100
+          unzip -oq "$FLAME_SOURCE_ZIP" -d "$DEST"
 
-      - name: Locate Gradle root
+          echo "Extracted project files:"
+          find "$DEST" -maxdepth 4 -type f | head -100
+
+      - name: Detect Gradle root
         shell: bash
         run: |
           set -e
 
-          ROOT="$RUNNER_TEMP/flame-project"
+          ROOT="$RUNNER_TEMP/flame-source"
 
           SETTINGS=$(find "$ROOT" -type f \
             \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
@@ -121,23 +132,25 @@ jobs:
             -print -quit)
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle was not found."
+            echo "ERROR: Gradle settings file missing."
+            find "$ROOT" -maxdepth 5 -type d
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
+          PROJECT=$(dirname "$SETTINGS")
 
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
-             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle was not found."
+          if [ ! -f "$PROJECT/app/build.gradle" ] && \
+             [ ! -f "$PROJECT/app/build.gradle.kts" ]; then
+            echo "ERROR: Android app module not found."
+            find "$PROJECT" -maxdepth 4 -type f
             exit 1
           fi
 
-          echo "FLAME_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "FLAME_PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
 
-          echo "Gradle root: $PROJECT_DIR"
+          echo "Gradle root: $PROJECT"
 
-      - name: Build FLAME Launcher APK
+      - name: Build Debug APK
         shell: bash
         run: |
           set -e
@@ -151,7 +164,7 @@ jobs:
             gradle --no-daemon --stacktrace assembleDebug
           fi
 
-      - name: Prepare APK
+      - name: Verify APK
         shell: bash
         run: |
           set -e
@@ -162,7 +175,7 @@ jobs:
             -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
+            echo "ERROR: Build completed but APK was not found."
             exit 1
           fi
 
@@ -172,7 +185,7 @@ jobs:
 
           ls -lh "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER.apk"
 
-      - name: Upload APK
+      - name: Upload FLAME Launcher APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-LAUNCHER-APK
