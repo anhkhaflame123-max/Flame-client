@@ -25,25 +25,41 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK manually
+      - name: Install Android SDK Command-line Tools
         run: |
           set -e
 
           SDK="$ANDROID_SDK_ROOT"
-          mkdir -p "$SDK"
 
-          echo "Checking SDK manager..."
-          ls "$SDK/cmdline-tools/16.0/bin/"
+          mkdir -p "$SDK/cmdline-tools"
 
-          echo "Installing required Android packages..."
-          "$SDK/cmdline-tools/16.0/bin/sdkmanager" \
+          wget -q \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -O commandlinetools.zip
+
+          mkdir -p "$SDK/cmdline-tools/latest"
+
+          unzip -oq commandlinetools.zip \
+            -d "$SDK/cmdline-tools/latest"
+
+          mkdir -p "$SDK/cmdline-tools/latest/cmdline-tools"
+
+          mv "$SDK/cmdline-tools/latest/cmdline-tools/"* \
+            "$SDK/cmdline-tools/latest/"
+
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+
+          chmod +x "$SDKMANAGER"
+
+          echo "Installing Android SDK packages..."
+
+          "$SDKMANAGER" \
             --sdk_root="$SDK" \
-            --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          yes | "$SDK/cmdline-tools/16.0/bin/sdkmanager" \
+          yes | "$SDKMANAGER" \
             --sdk_root="$SDK" --licenses || true
 
       - name: Install Gradle 8.9
@@ -72,7 +88,11 @@ jobs:
             FLAME_CLIENT_BUILD_PART4.bin \
             > reconstructed/FLAME_SOURCE.zip
 
+          echo "Checking ZIP integrity..."
+
           unzip -t reconstructed/FLAME_SOURCE.zip
+
+          echo "Extracting source..."
 
           unzip -oq reconstructed/FLAME_SOURCE.zip \
             -d reconstructed/source
@@ -97,10 +117,12 @@ jobs:
 
           PROJECT_ROOT="$(dirname "$SETTINGS")"
 
-          echo "Project root: $PROJECT_ROOT"
+          echo "Gradle project found:"
+          echo "$PROJECT_ROOT"
+
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-      - name: Build FLAME APK
+      - name: Build FLAME Debug APK
         run: |
           set -e
 
@@ -121,9 +143,10 @@ jobs:
             -name "*.apk" \
             -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
 
+          echo "Generated APK:"
           ls -lh "$GITHUB_WORKSPACE/apk-output"
 
-      - name: Upload APK artifact
+      - name: Upload FLAME APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-CLIENT-APK
