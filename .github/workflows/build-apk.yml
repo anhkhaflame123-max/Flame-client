@@ -1,19 +1,19 @@
 
-name: Build FLAME Launcher APK
+name: Build FLAME CLIENT Simple Launcher APK
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [ main, master ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build FLAME Launcher
     runs-on: ubuntu-latest
-
-    env:
-      ANDROID_HOME: ${{ runner.temp }}/android-sdk
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -25,61 +25,113 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android Command Line Tools
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 'latest'
+
+      - name: Install Android SDK packages
         run: |
-          mkdir -p "$ANDROID_HOME/cmdline-tools"
-          cd "$RUNNER_TEMP"
-
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
-          unzip -q tools.zip
-
-          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
-          mv cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
-
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK
-        run: |
-          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses || true
-
           sdkmanager --sdk_root="$ANDROID_HOME" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Verify Android SDK
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager --version
-          ls "$ANDROID_HOME"
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-      - name: Find FLAME Launcher project
+      - name: Find FLAME project
+        shell: bash
         run: |
-          echo "Searching for Gradle project..."
-          find . -name "settings.gradle" -o -name "settings.gradle.kts"
+          echo "Checking repository..."
+          ls -la
 
-      - name: Build APK
-        run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          elif [ -f "FLAME_LAUNCHER/gradlew" ]; then
-            cd FLAME_LAUNCHER
-            chmod +x gradlew
-            ./gradlew assembleDebug
+          PROJECT_ROOT=""
+
+          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ]; then
+            PROJECT_ROOT="."
           else
-            echo "ERROR: gradlew not found!"
-            echo "Please check the FLAME Launcher project ZIP."
+            SETTINGS=$(find . -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -not -path "*/.gradle/*" \
+              -not -path "*/build/*" \
+              -print -quit)
+
+            if [ -n "$SETTINGS" ]; then
+              PROJECT_ROOT=$(dirname "$SETTINGS")
+            fi
+          fi
+
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: Gradle project not found!"
+            echo "Missing settings.gradle or settings.gradle.kts"
             exit 1
           fi
 
-      - name: Upload APK
+          echo "FLAME_PROJECT_DIR=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "Project found: $PROJECT_ROOT"
+
+      - name: Validate Android project
+        shell: bash
+        run: |
+          cd "$FLAME_PROJECT_DIR"
+
+          if [ ! -f "app/build.gradle" ] && \
+             [ ! -f "app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle not found!"
+            exit 1
+          fi
+
+          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
+            echo "ERROR: AndroidManifest.xml not found!"
+            exit 1
+          fi
+
+          echo "Android project validation passed."
+
+      - name: Build FLAME Launcher APK
+        shell: bash
+        run: |
+          cd "$FLAME_PROJECT_DIR"
+
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon --stacktrace assembleDebug
+          else
+            gradle --no-daemon --stacktrace assembleDebug
+          fi
+
+      - name: Check APK
+        shell: bash
+        run: |
+          cd "$FLAME_PROJECT_DIR"
+
+          APK=$(find . -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated!"
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+
+          mkdir -p "$GITHUB_WORKSPACE/artifact"
+          cp "$APK" "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER_DEBUG.apk"
+
+          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER_DEBUG.apk"
+          ls -lh "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER_DEBUG.apk"
+
+      - name: Upload FLAME Launcher APK
         uses: actions/upload-artifact@v4
         with:
-          name: FLAME-Launcher-APK
-          path: "**/build/outputs/apk/debug/*.apk"
+          name: FLAME-LAUNCHER-APK
+          path: artifact/FLAME_LAUNCHER_DEBUG.apk
           if-no-files-found: error
+          retention-days: 14
