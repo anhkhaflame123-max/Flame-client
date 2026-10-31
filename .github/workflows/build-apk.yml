@@ -30,26 +30,25 @@ jobs:
           set -e
 
           SDK="$ANDROID_SDK_ROOT"
+          TOOLS="$SDK/cmdline-tools/latest"
 
           mkdir -p "$SDK/cmdline-tools"
+          rm -rf "$TOOLS"
+          mkdir -p "$TOOLS"
 
           wget -q \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -O commandlinetools.zip
 
-          mkdir -p "$SDK/cmdline-tools/latest"
-
           unzip -oq commandlinetools.zip \
-            -d "$SDK/cmdline-tools/latest"
+            -d "$TOOLS"
 
-          mkdir -p "$SDK/cmdline-tools/latest/cmdline-tools"
-
-          mv "$SDK/cmdline-tools/latest/cmdline-tools/"* \
-            "$SDK/cmdline-tools/latest/"
-
-          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          SDKMANAGER="$TOOLS/cmdline-tools/bin/sdkmanager"
 
           chmod +x "$SDKMANAGER"
+
+          echo "Checking SDK Manager..."
+          "$SDKMANAGER" --version
 
           echo "Installing Android SDK packages..."
 
@@ -89,11 +88,9 @@ jobs:
             > reconstructed/FLAME_SOURCE.zip
 
           echo "Checking ZIP integrity..."
-
           unzip -t reconstructed/FLAME_SOURCE.zip
 
           echo "Extracting source..."
-
           unzip -oq reconstructed/FLAME_SOURCE.zip \
             -d reconstructed/source
 
