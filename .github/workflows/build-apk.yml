@@ -11,6 +11,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,32 +25,45 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools: 16.0
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
-
-      - name: Configure Android SDK
+      - name: Setup Android SDK manually
         run: |
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          set -e
+
+          SDK="$ANDROID_SDK_ROOT"
+          mkdir -p "$SDK"
+
+          echo "Checking SDK manager..."
+          ls "$SDK/cmdline-tools/16.0/bin/"
+
+          echo "Installing required Android packages..."
+          "$SDK/cmdline-tools/16.0/bin/sdkmanager" \
+            --sdk_root="$SDK" \
+            --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          yes | "$SDK/cmdline-tools/16.0/bin/sdkmanager" \
+            --sdk_root="$SDK" --licenses || true
 
       - name: Install Gradle 8.9
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          set -e
+
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.9-bin.zip
+
           unzip -q gradle-8.9-bin.zip
-          echo "$PWD/gradle-8.9/bin" >> $GITHUB_PATH
+
+          echo "$PWD/gradle-8.9/bin" >> "$GITHUB_PATH"
+
           gradle --version
 
       - name: Reconstruct FLAME source
         run: |
           set -e
 
-          mkdir -p reconstructed
+          mkdir -p reconstructed/source
 
           cat \
             FLAME_CLIENT_BUILD_PART1.bin \
@@ -55,10 +72,7 @@ jobs:
             FLAME_CLIENT_BUILD_PART4.bin \
             > reconstructed/FLAME_SOURCE.zip
 
-          echo "Checking ZIP integrity..."
           unzip -t reconstructed/FLAME_SOURCE.zip
-
-          mkdir -p reconstructed/source
 
           unzip -oq reconstructed/FLAME_SOURCE.zip \
             -d reconstructed/source
@@ -76,19 +90,17 @@ jobs:
             | head -n 1)
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: Cannot find settings.gradle"
+            echo "::error::Cannot find settings.gradle"
             find "$SOURCE" -maxdepth 5 -type f
             exit 1
           fi
 
-          PROJECT_ROOT=$(dirname "$SETTINGS")
+          PROJECT_ROOT="$(dirname "$SETTINGS")"
 
-          echo "Gradle project found:"
-          echo "$PROJECT_ROOT"
+          echo "Project root: $PROJECT_ROOT"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
 
-          echo "PROJECT_ROOT=$PROJECT_ROOT" >> $GITHUB_ENV
-
-      - name: Build FLAME Debug APK
+      - name: Build FLAME APK
         run: |
           set -e
 
@@ -109,10 +121,9 @@ jobs:
             -name "*.apk" \
             -exec cp {} "$GITHUB_WORKSPACE/apk-output/" \;
 
-          echo "APK files:"
           ls -lh "$GITHUB_WORKSPACE/apk-output"
 
-      - name: Upload FLAME APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-CLIENT-APK
