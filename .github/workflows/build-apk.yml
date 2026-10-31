@@ -1,19 +1,24 @@
 
-name: Build FLAME CLIENT Simple Launcher APK
+name: Build FLAME Launcher APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build FLAME Launcher
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+
+    env:
+      ANDROID_HOME: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
 
     steps:
       - name: Checkout repository
@@ -25,10 +30,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 'latest'
+      - name: Download Android Command Line Tools
+        run: |
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          cd "$RUNNER_TEMP"
+
+          wget -q \
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -O commandlinetools.zip
+
+          unzip -q commandlinetools.zip
+
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+
+          mv cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+
+      - name: Verify sdkmanager
+        run: |
+          ls -la "$ANDROID_HOME/cmdline-tools/latest/bin"
+          sdkmanager --version
+
+      - name: Accept Android SDK licenses
+        run: |
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses || true
 
       - name: Install Android SDK packages
         run: |
@@ -37,101 +64,73 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Find FLAME project
+      - name: Locate FLAME Launcher project
+        run: |
+          echo "Searching for Gradle project..."
+
+          find . -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/.gradle/*" \
+            -not -path "*/build/*"
+
+      - name: Build FLAME Launcher
         shell: bash
         run: |
-          echo "Checking repository..."
-          ls -la
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+            ./gradlew --no-daemon assembleDebug
 
-          PROJECT_ROOT=""
+          elif [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            gradle --no-daemon assembleDebug
 
-          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ]; then
-            PROJECT_ROOT="."
           else
-            SETTINGS=$(find . -type f \
+            PROJECT_DIR=$(find . -type f \
               \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
               -not -path "*/.gradle/*" \
               -not -path "*/build/*" \
-              -print -quit)
+              -print -quit | xargs -r dirname)
 
-            if [ -n "$SETTINGS" ]; then
-              PROJECT_ROOT=$(dirname "$SETTINGS")
+            if [ -z "$PROJECT_DIR" ]; then
+              echo "ERROR: Gradle project not found!"
+              exit 1
+            fi
+
+            cd "$PROJECT_DIR"
+
+            if [ -f "gradlew" ]; then
+              chmod +x gradlew
+              ./gradlew --no-daemon assembleDebug
+            else
+              gradle --no-daemon assembleDebug
             fi
           fi
 
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo "ERROR: Gradle project not found!"
-            echo "Missing settings.gradle or settings.gradle.kts"
-            exit 1
-          fi
-
-          echo "FLAME_PROJECT_DIR=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          echo "Project found: $PROJECT_ROOT"
-
-      - name: Validate Android project
-        shell: bash
+      - name: Find generated APK
         run: |
-          cd "$FLAME_PROJECT_DIR"
+          mkdir -p "$RUNNER_TEMP/flame-apk"
 
-          if [ ! -f "app/build.gradle" ] && \
-             [ ! -f "app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle not found!"
-            exit 1
-          fi
-
-          if [ ! -f "app/src/main/AndroidManifest.xml" ]; then
-            echo "ERROR: AndroidManifest.xml not found!"
-            exit 1
-          fi
-
-          echo "Android project validation passed."
-
-      - name: Build FLAME Launcher APK
-        shell: bash
-        run: |
-          cd "$FLAME_PROJECT_DIR"
-
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew --no-daemon --stacktrace assembleDebug
-          else
-            gradle --no-daemon --stacktrace assembleDebug
-          fi
-
-      - name: Check APK
-        shell: bash
-        run: |
-          cd "$FLAME_PROJECT_DIR"
-
-          APK=$(find . -type f \
+          APK_PATH=$(find . -type f \
             -path "*/build/outputs/apk/debug/*.apk" \
             -print -quit)
 
-          if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated!"
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: APK not found after build!"
             exit 1
           fi
 
-          echo "APK found: $APK"
+          cp "$APK_PATH" "$RUNNER_TEMP/flame-apk/FLAME_LAUNCHER.apk"
 
-          mkdir -p "$GITHUB_WORKSPACE/artifact"
-          cp "$APK" "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER_DEBUG.apk"
-
-          sha256sum "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER_DEBUG.apk"
-          ls -lh "$GITHUB_WORKSPACE/artifact/FLAME_LAUNCHER_DEBUG.apk"
+          ls -lh "$RUNNER_TEMP/flame-apk/FLAME_LAUNCHER.apk"
 
       - name: Upload FLAME Launcher APK
         uses: actions/upload-artifact@v4
         with:
           name: FLAME-LAUNCHER-APK
-          path: artifact/FLAME_LAUNCHER_DEBUG.apk
+          path: ${{ runner.temp }}/flame-apk/FLAME_LAUNCHER.apk
           if-no-files-found: error
           retention-days: 14
